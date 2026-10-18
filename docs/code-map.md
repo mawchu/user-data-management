@@ -1,237 +1,80 @@
-# 核心程式碼地圖與解題思路
+# 前端實作地圖與解題思路
 
-> 用途：面試前複習。每個檔案回答三件事：**它解決題目哪個要求、關鍵做法、面試官可能追問什麼**。
-> 行號以目前 main 分支為準（`src/mock/db.ts` 共 327 行）。
+> 用途：面試前複習。重點是**拿到 API 資料之後，前端做了什麼、為什麼這樣做**。
+> 每節照同一個順序：問題 → 做法（程式碼加行號）→ 代價 → 怎麼驗證。標「事實」的是程式碼或實測，標「推測」的是原理推論。
 
 ## 一張圖看資料流
 
 ```
-使用者捲動 / 輸入搜尋 / 點表頭
+使用者捲動 / 輸入搜尋 / 點表頭 / 按刪除、編輯、釘選
         │
-UserTable.vue（虛擬捲動，只畫看得到的約 30 列）
+UserTable.vue   虛擬捲動：不論載入幾筆，只畫看得到的約 30 列
         │ emit('loadMore')
-App.vue（對話框狀態機：編輯 → 確認更新、確認刪除、釘選）
+App.vue         確認視窗流程、搜尋防抖 300ms
         │
-useUserList.ts（列表狀態 + AbortController）
+useUserList.ts  每次 500 筆、shallowRef、AbortController、刪除後 cursor - 1
         │ usersApi.list(query, signal)
-api/users.ts → api/http.ts（fetch 介面，真後端時只換 transport）
-        │
-mock/server.ts（假的 fetch：路由、延遲、可取消、回傳真的 Response）
-        │ postMessage
-mock/worker.ts（Web Worker：背景執行緒，主畫面不會卡）
-        │
-mock/db.ts（1,000 萬筆：欄式 TypedArray + 字典編碼 + 計數排序）
+api/users.ts → api/http.ts   標準 fetch 寫法
+════════════════ 以上是前端；以下正式環境是後端 API ════════════════
+mock/*          測試用的假後端（附錄），接真 API 時在 main.ts 刪一行即可
 ```
 
-**一句話版本**：重活（排序、搜尋 1,000 萬筆）丟到背景執行緒；畫面只拿 500 筆一批、只畫看得到的列；請求可以取消。
+前端拿到的永遠只是一批 500 筆的 JSON：`{ data, nextCursor, hasMore, total }`。搜尋、排序、釘選合併都由後端完成。
 
----
+## 先讀這 4 個檔案
 
-## 優先順序：先讀懂這 4 個檔案
-
-| 順序 | 檔案 | 行數 | 對應題目要求 |
-|---|---|---|---|
-| 1 | `src/mock/db.ts` | 327 | 1,000 萬筆、搜尋、排序、刪除、釘選 |
-| 2 | `src/composables/useUserList.ts` | 98 | 無限捲動 500 筆、取消請求、刪除後游標修正 |
-| 3 | `src/components/UserTable.vue` | 213 | 不佔記憶體的畫面渲染（虛擬捲動） |
-| 4 | `src/mock/server.ts` + `src/api/http.ts` | 104 + 34 | 模擬打 API、AbortController |
-
-其餘（`App.vue`、各 Dialog、`validate.ts`）是 UI 與表單，邏輯簡單，掃過即可。
-
----
-
-## 1. `src/mock/db.ts`：資料怎麼存、怎麼查
-
-### 1-1 欄式儲存（columnar storage）＋字典編碼（dictionary encoding）
-- **問題**：1,000 萬個 `{ userName, position, ... }` 物件，每個物件在 JS 引擎裡約 100 多 bytes，加起來超過 1GB（ADR 0004 實測 Map 版本 1,190MB）。
-- **做法**：不存物件，改成「每一欄一條 TypedArray（固定型別的數字陣列）」。字串欄先查字典換成小整數：
-  - `nameIds: Uint16Array`（每筆 2 bytes，存「名字字典的編號」）
-  - `positionIds / locationIds / ages: Uint8Array`（每筆 1 byte）
-  - `startDays: Uint16Array`（距 1950-01-01 的天數）
-  - 共約 70MB（ADR 0004）。
-- **程式位置**：`class Dict`（約 36–61 行）、`UserDb` 欄位宣告與建構子（81–128 行）。
-- **多品牌類比**：訂單表的「品牌」欄不存 `"Nike"` 字串 1,000 萬次，而是存 `0`，另有一張 `brands = ["Nike", "Adidas", ...]` 對照表。
-
-### 1-2 搜尋：先查字典，再掃列（`build()`，約 258–283 行）
-- **問題**：對 1,000 萬列逐筆做 5 次 `toLowerCase().includes()` 太慢。
-- **做法**：
-  1. 先在字典上比對關鍵字。名字只有幾千種、職位只有幾十種，所以只要比對幾千次，得到 `nameHit[編號] = 1 / 0` 這種查表陣列。
-  2. 再掃 1,000 萬列，每列只做 5 次陣列查表（`nameHit[nameIds[rowIndex]] || positionHit[positionIds[rowIndex]] ...`），沒有任何字串運算。
-- **實測**：搜尋約 85–173ms（10M 筆）。
-
-### 1-3 排序：計數排序（counting sort，`countingSort()`，約 300–325 行）
-- **為什麼是 O(n)**：不做兩兩比較。值域小（age 256 種、名字 ≤ 65,536 種），所以：
-  1. 數每個值出現幾次（n 步）
-  2. 累加，得到每個值的起始位置（k 步）
-  3. 每筆直接放到位置上（n 步）
-  → O(n + k)，k 遠小於 n，所以等於 O(n)。比較排序的下限是 O(n log n)，10M 筆約多 23 倍。
-- **穩定性（stable）**：同值的資料保持原本順序（id 由小到大）。這讓「同年齡時順序固定」，捲動到下一批不會跳動。
-- **字串怎麼排**：`Dict.rank()` 把編號換成「字母順序名次」，只對字典（幾千筆）做一次真正的字串排序，再拿名次去計數排序。
-- **省記憶體技巧**：`bufferA / bufferB` 兩個 40MB 緩衝區輪流使用，不用每次排序都配置新陣列。
-- **實測**：排序 189–450ms。
-
-### 1-4 查詢快照（snapshot）＋ cursor（`list()`，約 130–164 行）
-- **問題**：如果每批都重新查詢，使用者捲到第 3 批時資料被別人改了，順序就會跳動或漏資料。
-- **做法**：第一批（cursor = 0）算出完整排序結果存成快照，後續批次的 cursor 就是「快照裡的位置」。
-- **為什麼不用頁碼**：ADR 0002（被取代）→ ADR 0003。
-
-### 1-5 釘選合併（`effectivePinPositions()`，約 254–256 行）
-- 釘選的列不參與排序，在 `list()` 回傳時才按位置插入。
-- `Math.min(p.position - 1, snap.length + i)`：釘在第 100 列但只剩 3 筆資料時，就排到最後面，不留空洞。
-- 搜尋時，不符合關鍵字的釘選列會隱藏；同一個位置只能釘一筆（衝突回 409）。規則見 ADR 0008。
-
-### 1-6 刪除（`remove()`，約 190–206 行）
-- 標記 `deleted[i] = 1`（軟刪除，不搬動 1,000 萬筆）。
-- 同時從快照中移除那一列（`copyWithin` 往前搬），所以前端的 cursor 要減 1（見下一節）。
-
----
-
-## 2. `src/composables/useUserList.ts`：前端列表狀態
-
-| 機制 | 程式 | 為什麼 |
+| 順序 | 檔案 | 解決什麼 |
 |---|---|---|
-| `shallowRef` | `const rows = shallowRef<UserRow[]>([])` | 數萬筆資料不需要深層響應式（Vue 不必替每個物件建 Proxy），省記憶體 |
-| 換新陣列而不是 push | `rows.value = rows.value.concat(res.data)` | shallowRef 只偵測「整個換掉」，push 不會觸發子元件更新（這個 bug 當初真的踩過） |
-| AbortController | `controller?.abort()` in `reload()` | 換搜尋字時取消舊請求，避免慢的舊結果晚回來蓋掉新結果（race condition：競態） |
-| `controller === current` 判斷 | `finally` 區塊 | 被取消的舊請求不能把新請求的 loading 狀態關掉 |
-| 刪除後 cursor - 1 | `removeRow()` | 後端快照少了一列，不往前退就會漏掉一筆 |
-| `toSpliced` / `with` | 刪除、更新 | 不改原陣列、回傳新陣列，同樣是為了觸發 shallowRef |
-| `onScopeDispose` | 最後一行 | 元件卸載時取消還在路上的請求 |
-
-**支付流程類比**：使用者連按兩次「查詢訂單狀態」，第一次請求很慢。沒有 abort 的話，第一次的「待付款」可能比第二次的「已付款」晚回來，畫面就顯示錯誤狀態。
-
-**刻意不取消的東西**：更新、刪除這類修改請求（mutation）。一旦送出，伺服器可能已經改了，前端取消只會讓畫面和實際資料不一致（ADR 0010）。
+| 1 | `src/composables/useUserList.ts`（98 行） | 一次載入 500 筆、取消過期請求、刪改後同步畫面 |
+| 2 | `src/components/UserTable.vue`（213 行） | 虛擬捲動、提早載入下一批 |
+| 3 | `src/api/http.ts`、`src/api/users.ts` | 打 API 的方式、AbortSignal |
+| 4 | `src/App.vue`（314 行） | 刪除、更新、釘選的確認視窗 |
 
 ---
 
-## 3. `src/components/UserTable.vue`：虛擬捲動
-
-- **問題**：捲到 5,000 筆就有 5,000 × 6 個 DOM 節點，捲動會卡、記憶體會漲。
-- **做法**（約 30–60 行）：
-  - 固定列高 `ROW_HEIGHT = 44`，所以「第幾列在哪裡」可以直接算出來，不必量測。
-  - `start = floor(scrollTop / 44) - OVERSCAN`，`end = ceil((scrollTop + 視窗高) / 44) + OVERSCAN`。
-  - 只渲染 `rows.slice(start, end)`，大約 30 列，用 `translateY` 位移到正確位置。
-  - `requestAnimationFrame` 節流捲動事件；`ResizeObserver` 追蹤視窗高度。
-  - 離底部剩不到 `PREFETCH_ROWS = 150` 列時先載入下一批，使用者感覺不到等待。
-- **為什麼不用 Vuetify**：職缺沒要求、手寫能說明原理、少一個大依賴（ADR 0007）。
-
----
-
-## 4. `src/mock/server.ts` + `src/api/http.ts`：模擬打 API
-
-- `createMockFetch()` 的函式簽名和 `fetch` 一樣，回傳真的 `Response` 物件，有 200 / 204 / 404 / 409 / 422 狀態碼。
-- 模擬 150–400ms 的網路延遲（`sleep`），延遲期間可以被 `signal` 取消（`raceAbort`）。
-- `http.ts` 的 `setTransport()`：換成真後端時改一行就好，元件和 composable 完全不用動。
-
----
-
-## 面試自我檢查（每題要能不看稿講 1 分鐘）
-
-1. 為什麼不用物件陣列或 Map 存 1,000 萬筆？（1-1）
-2. 計數排序為什麼是 O(n)？穩定性在這裡有什麼用？（1-3）
-3. 搜尋為什麼不用逐筆做 `includes`？（1-2）
-4. cursor 跟頁碼差在哪？刪除後為什麼 cursor 要減 1？（1-4、1-6、2）
-5. 為什麼用 `shallowRef`？為什麼不能直接 push？（2）
-6. AbortController 解決什麼問題？為什麼修改請求不取消？（2）
-7. 虛擬捲動怎麼算出要畫哪幾列？為什麼列高要固定？（3）
-8. 50 人同時用，前端能做什麼？（ADR 0011：限制已載入列數、相同查詢快取、debounce、409 版本衝突）
-
----
-
-# 深入：六個實作主題
-
-> 每個主題照同一個順序：**問題 → 做法（附程式碼與位置）→ 代價 → 怎麼驗證**。
-> 標「事實」的是程式碼或實測結果；標「推測」的是原理推論，沒有在這個專案實測。
-> 行號以 `refactor: 縮寫變數改成完整名稱` 這個 commit 為準。
-
-## A. TypedArray 的實作概念（ADR 0004）
+## 1. 每次 500 筆的無限捲動與 cursor（ADR 0003）
 
 ### 問題
-一般寫法是 `users: User[]`，每筆一個物件。JS 引擎替每個物件額外存「隱藏類別指標、屬性表」等資訊，字串也各自佔空間。ADR 0004 實測，1,000 萬筆用 Map 存要 **1,190MB**（平均每筆約 119 bytes），瀏覽器分頁很可能直接崩潰。
+1,000 萬筆不可能一次拿。用頁碼（page=3）的話，前面有人刪資料，第 3 頁的內容就會整個往前移，造成重複或漏資料（ADR 0002，已被取代）。
 
-### TypedArray 是什麼
-- 一塊**連續、固定型別**的記憶體（底層是 `ArrayBuffer`）。`Uint8Array` 的每格固定 1 byte，只能放 0–255；`Uint16Array` 每格 2 bytes，可放 0–65,535。
-- 和一般陣列的差別：一般陣列每格可以放任何東西（物件、字串、數字），所以每格其實存的是「指標」，指向散落在記憶體各處的值。TypedArray 每格直接就是數字本身，**沒有物件、沒有指標**。
-
-```
-一般物件陣列（每筆一個物件，散落各處）
-users[0] ──► { userName: "Amy Chen", position: "QA Engineer", age: 30, ... }
-users[1] ──► { userName: "Ben Lin",  position: "UI Designer", age: 41, ... }
-
-欄式 TypedArray（每個欄位一條連續陣列，第 rowIndex 格 = 第 rowIndex 列）
-nameIds     : [ 1203 | 87  | ... ]   Uint16，每格 2 bytes
-positionIds : [ 6    | 4   | ... ]   Uint8，每格 1 byte
-ages        : [ 30   | 41  | ... ]   Uint8
-startDays   : [ 23810| 24001| ... ]  Uint16，1950-01-01 起算的天數
-```
-
-### 字串怎麼放進數字陣列：字典編碼（dictionary encoding）
-字串欄位只存「字典編號」，真正的字串只存一次。
-
-`src/mock/db.ts:36-61`
+### 做法
+`src/composables/useUserList.ts:23-43`
 ```ts
-class Dict {
-  readonly values: string[] = []                 // 編號 → 字串，例如 values[6] = 'QA Engineer'
-  private index = new Map<string, number>()      // 字串 → 編號，新增時查重複
-  add(value: string): number {
-    let id = this.index.get(value)
-    if (id !== undefined) return id               // 已經有了，直接回傳編號
-    if (this.values.length >= this.cap) throw new ApiError(507, '此欄位的不同值已達 mock 上限')
-    id = this.values.length
-    this.values.push(value)
-    this.index.set(value, id)
-    ...
+async function loadMore() {
+  if (loading.value || !hasMore.value) return                 // 正在載入或已經到底就不重複請求
+  const current = (controller = new AbortController())
+  loading.value = true
+  try {
+    const response = await usersApi.list({ ...query, cursor, limit: BATCH }, current.signal)  // BATCH = 500
+    rows.value = rows.value.concat(response.data)              // 接在已載入的資料後面
+    total.value = response.total
+    cursor = response.nextCursor                               // 後端告訴我「下一批從哪裡開始」
+    hasMore.value = response.hasMore
+  } catch (requestError) {
+    if (!isAbortError(requestError)) error.value = (requestError as Error).message  // 被取消不算錯誤
+  } finally {
+    if (controller === current) { loading.value = false; controller = null }
+  }
+}
 ```
+- **cursor** 是後端給的「書籤」，前端不必知道它的意義，只要原封不動地傳回去。
+- **觸發時機**在 `UserTable.vue:60-62`：離已載入的底部剩不到 150 列就先抓下一批（見第 3 節）。
 
-**多品牌類比**：訂單表的品牌欄不存 1,000 萬次 `"Nike"`，而是存 `0`，另外有一張 `brands = ["Nike", "Adidas", ...]`。
-
-### 欄位宣告與型別選擇
-`src/mock/db.ts:86-110`
+### 刪除後為什麼 cursor 要減 1
+`useUserList.ts:64-73`
 ```ts
-private nameIds: Uint16Array      // 名字最多 65,536 種（Dict 上限 0xffff）
-private positionIds: Uint8Array   // 職位最多 256 種
-private locationIds: Uint8Array
-private ages: Uint8Array          // 年齡 0–255 綽綽有餘
-private startDays: Uint16Array    // 1950-01-01 起算天數，可表示到 2129 年
-private deleted: Uint8Array       // 軟刪除旗標
-private pinnedFlag: Uint8Array    // 是否被釘選
-...
-this.nameIds = new Uint16Array(size)   // 建立時就一次配置好 1,000 萬格
+rows.value = rows.value.toSpliced(rowIndex, 1)
+if (cursor) cursor = String(Number(cursor) - 1)   // 後端結果少了一筆，書籤往前一格，下一批才不會漏掉一筆
 ```
+**例子**：已載入 500 筆，cursor = 500。刪掉第 10 筆後，原本的第 501 筆變成第 500 筆。如果 cursor 還是 500，下一批會從原本的第 502 筆開始，第 501 筆就被跳過了。
+（這個做法依賴「cursor 是位置」。若後端改用 keyset cursor，也就是「最後一筆的排序值 + id」，就不用修正。這點在 README「尚未處理」有寫。）
 
-**型別怎麼選**：看「這一欄最多有幾種值」。日期不存字串 `"2015-03-01"`（10 個字元），而是存「距離 1950-01-01 幾天」，2 bytes 就夠。轉回字串在 `db.ts:24-31`（`dayToDateString`，有快取，同一天只格式化一次）。
-
-### 讀一筆資料時再組回物件
-`src/mock/db.ts`，`toUser()`（約 241-250 行）
-```ts
-private toUser(rowIndex: number): User {
-  return {
-    id: rowIndex + 1,
-    userName: this.names.values[this.nameIds[rowIndex]],   // 編號 → 查字典 → 字串
-    position: this.positions.values[this.positionIds[rowIndex]],
-    ...
-```
-**只有要回傳給前端的那 500 筆才組成物件**，其餘 999 萬多筆永遠是數字。
-
-### 記憶體算術（事實）
-| 項目 | 每列 | 1,000 萬列 |
-|---|---|---|
-| 5 個資料欄位（2+1+1+1+2） | 7 bytes | 70MB |
-| deleted + pinnedFlag | 2 bytes | 20MB |
-| 排序緩衝區 bufferA + bufferB（Uint32） | 8 bytes | 80MB |
-| 合計 | | 約 170MB（實測整個分頁約 183MB） |
-
-### 代價
-- 欄位的值種類有上限（例如職位超過 256 種就要改成 Uint16）。`Dict.add` 爆上限會回 507。
-- 程式比 `users[i].age` 難讀，所以把它封裝在 `UserDb` 裡面，外部只看到 `User` 物件。
-
-### 怎麼驗證
-- `tests/db.test.ts`：26 個測試，拿同一份資料用「最直白的物件陣列寫法」算一次當標準答案，比對排序、搜尋、刪除、釘選的結果完全一致。
-- `PERF=1 npx vitest run tests/perf.test.ts`：印出產生、排序、搜尋的耗時。
+### 驗證（事實）
+e2e：刪除 #7 後繼續捲動，前 1,009 列的 id 沒有重複，被刪的列也沒有再出現。
 
 ---
 
-## B. shallowRef 減少響應式造成的效能負擔（ADR 0009）
+## 2. shallowRef：減少響應式造成的負擔（ADR 0009）
 
 ### 問題
 `ref([])` 是**深層響應式**：Vue 會把陣列和裡面每個物件都包成 Proxy（代理物件：讀寫屬性時會先經過 Vue，讓 Vue 記錄「誰用到這個值」）。列表資料有上萬筆時，每次 `concat`、`findIndex` 都要穿過 Proxy、逐格記錄依賴。
@@ -274,83 +117,7 @@ const rows = shallowRef<UserRow[]>([])
 
 ---
 
-## C. 釘選（pin）怎麼實作（ADR 0008）
-
-### 規則
-1. 釘在第 N 列，不論怎麼排序都顯示在第 N 列。
-2. 搜尋時，不符合關鍵字的釘選列會隱藏。
-3. 目標位置超過資料量時，排到最後面（不留空洞）。
-4. 同一個位置只能釘一筆，衝突回 409。
-
-### 資料結構
-`src/mock/db.ts:93-94`
-```ts
-private pinnedFlag: Uint8Array                  // pinnedFlag[rowIndex] = 1 表示被釘選
-private pins = new Map<number, number>()        // id → 目標位置（1 起算）
-```
-兩份資料各有用途：`Map` 讓「列出所有釘選」很快，`pinnedFlag` 讓「掃 1,000 萬列時跳過釘選列」只要查一格陣列。
-
-### 核心想法：釘選列不參與排序，最後再插回去
-**步驟 1：建快照時排除釘選列**，`db.ts:266`、`db.ts:277`
-```ts
-if (!deleted[rowIndex] && !pinnedFlag[rowIndex]) view[length++] = rowIndex
-```
-
-**步驟 2：其餘的列照常排序**，`db.ts:289`
-
-**步驟 3：決定每個釘選列實際的位置**，`db.ts:252-258`
-```ts
-// 例：只剩 3 筆一般資料，釘在第 100 列的資料會出現在第 4 列
-private effectivePinPositions(snapshot: Snapshot): number[] {
-  return snapshot.pins.map((pin, pinOrder) => Math.min(pin.position - 1, snapshot.length + pinOrder))
-}
-```
-
-**步驟 4：分頁時合併**，`db.ts:150-162`
-```ts
-const pinSlots = this.effectivePinPositions(snapshot)
-let pinIndex = 0
-while (pinIndex < pinSlots.length && pinSlots[pinIndex] < offset) pinIndex++   // 跳過這批之前的釘選列
-let viewIndex = offset - pinIndex                                             // 一般列要從快照的哪裡開始拿
-for (let position = offset; position < end; position++) {
-  if (pinIndex < pinSlots.length && pinSlots[pinIndex] === position) {
-    const pin = snapshot.pins[pinIndex++]                                    // 這個位置是釘選列
-    data.push({ ...this.toUser(pin.id - 1), pinnedAt: pin.position })
-  } else {
-    data.push({ ...this.toUser(snapshot.view[viewIndex++]), pinnedAt: null }) // 否則依序填一般列
-  }
-}
-```
-
-### 用例子走一次
-#13 釘在第 3 列（位置 index 2），依 Age 排序後一般列是 `[a, b, c, d, …]`：
-
-| 位置 | 0 | 1 | 2 | 3 | 4 |
-|---|---|---|---|---|---|
-| 結果 | a | b | **#13** | c | d |
-
-改成依 Date Start 排序，一般列變成 `[x, y, z, …]`，結果是 `x, y, #13, z…`。#13 永遠在位置 2。
-
-**為什麼 `viewIndex = offset - pinIndex`**：假設要拿第 2 批（offset = 500），而前面有 1 個釘選列佔掉一格，那一般列只用掉 499 筆，所以要從快照的第 499 筆開始拿。
-
-### 其他配套
-- 衝突檢查：`db.ts:213-215`，同位置已被別人釘選就丟 409。
-- 釘選或取消後清掉快照：`db.ts:218`、`db.ts:227`（`this.snapshot = null`）。前端會從頭重查：`useUserList.ts:84-92`。
-- 搜尋時隱藏不符合的釘選列：`db.ts:291`。
-- 刪除釘選列：`db.ts:197-199`，從快照的 pins 拿掉即可，不用動排序結果。
-- 畫面上的 📌：`UserTable.vue:106`；釘選和取消按鈕：`UserTable.vue:116-117`。
-
-### 代價
-- 釘選後要從頭重新查詢一次（約幾百毫秒），使用者會回到列表頂端。
-- 要換位置得先取消再釘。
-
-### 怎麼驗證
-- `tests/db.test.ts`：每一種排序都檢查釘選列在指定位置，而且其餘列仍然照排序規則。
-- e2e：#13 釘在第 3 列後，切換 Age、User name、Date Start 的升降冪，都還在第 3 列；同一位置重複釘選會顯示錯誤。
-
----
-
-## D. 用高度計算可視範圍（虛擬捲動，ADR 0007）
+## 3. 虛擬捲動：用高度算出可視範圍（ADR 0007）
 
 ### 問題
 捲到 5,000 筆，就有 5,000 列 × 8 格 = 4 萬個 DOM 節點。每個節點都佔記憶體，而且瀏覽器每次排版都要處理它們，捲動會卡。
@@ -413,32 +180,90 @@ e2e 第 2 步：已載入 500 筆，但 DOM 裡只有 25 列（`e2e/run.mjs`）�
 
 ---
 
-## E. 如何減少 RAM？是否使用虛擬 DOM？
+## 4. AbortController：取消過期的查詢（ADR 0010）
 
-### 先釐清兩個名詞
-- **虛擬 DOM（virtual DOM）**：Vue 本身的機制。Vue 先在 JS 裡建一棵「描述畫面的物件樹」（vnode），和上一次比對差異，只把有變的部分寫進真正的 DOM。**這個專案有用，因為 Vue 就是這樣運作的**，不是我們額外加的。
-- **虛擬捲動（virtual scroll）**：我們自己做的，決定「哪些列要交給 Vue 渲染」。
+### 問題（競態，race condition）
+使用者快速連點表頭三次（升冪 → 降冪 → 取消）。三個請求同時在路上，如果第一個最慢回來，畫面會被舊結果蓋掉。
+**支付流程類比**：連按兩次「查詢付款狀態」，慢的那次回傳「待付款」，結果蓋掉了快的那次「已付款」。
 
-兩者是互補的：虛擬 DOM 只負責「比對要畫的東西」，沒有幫你減少要畫的數量。5,000 列交給 Vue，就會有 5,000 列的 vnode 和真實 DOM。虛擬捲動先把數量砍到約 30 列，Vue 的比對成本和 DOM 數量才會跟著變小。
+### 做法
+`useUserList.ts:45-54`
+```ts
+function reload() {
+  controller?.abort()      // 取消還在路上的舊查詢
+  controller = null
+  rows.value = []
+  cursor = null
+  ...
+  return loadMore()
+}
+```
+- 換搜尋字、點表頭、釘選後都會呼叫 `reload()`。元件卸載時也會取消（`useUserList.ts:95`）。
+- `signal` 一路傳到 fetch：`api/users.ts` 的 `list(query, signal)` → `api/http.ts` 的 `request(..., { signal })`。
+- 被取消的請求會丟出 `AbortError`，`isAbortError()`（`http.ts:8`）把它和真正的錯誤分開，不顯示錯誤訊息。
+- `finally` 裡的 `controller === current`（`useUserList.ts:38`）：被取消的舊請求不能把「新請求的 loading」關掉。
 
-**面試回答模板**：「Vue 有虛擬 DOM，但它解決的是『更新時改最少的 DOM』，不是『DOM 太多』。DOM 太多要靠虛擬捲動，只渲染可視範圍。」
+### 刻意不取消的：修改類請求
+更新、刪除、釘選送出後就不取消（`api/users.ts` 這幾支沒有 signal 參數）。請求一旦到了後端，資料可能已經改好；前端這時取消，只會讓畫面和實際資料不一致。
 
-### 本專案三層省記憶體
-| 層 | 做法 | 位置 | 效果 |
-|---|---|---|---|
-| 資料層（Web Worker） | 欄式 TypedArray + 字典編碼 | `db.ts:86-110` | 1,190MB → 約 70MB（ADR 0004） |
-| 資料層 | 排序緩衝區重複使用 | `db.ts:329-333` | 每次排序不再配置新的 40MB |
-| 傳輸層 | 一次只回傳 500 筆物件 | `db.ts:131-165`、`useUserList.ts:6` | 主執行緒只持有已載入的列 |
-| 狀態層 | `shallowRef`，不建 Proxy | `useUserList.ts:11` | 見主題 B |
-| 畫面層 | 虛擬捲動 | `UserTable.vue:30-45` | DOM 固定約 25–30 列 |
-
-**為什麼放在 Web Worker（ADR 0006）**：Worker 是另一條執行緒，有自己的記憶體空間。排序 1,000 萬筆的 0.2–0.45 秒在背景跑，主畫面不會卡。資料也不在主執行緒，所以 Vue 完全不知道這 1,000 萬筆的存在。
-
-**誠實的提醒**：mock 資料庫本身約 180MB，是「假裝自己是後端」的成本。接上真 API 後，前端只需要幾 MB（ADR 0011）。面試時要主動講清楚：前端真正的省記憶體是傳輸層以下那幾列。
+### 驗證（事實）
+- 單元測試：`tests/mock-fetch.test.ts`（6 項）、`tests/use-user-list.test.ts`（1 項）。
+- e2e：快速連點 Location 三次，取消了 2 個過期請求，畫面停在最後一次的結果。畫面上方也會顯示「已取消 N 個過期請求」。
 
 ---
 
-## F. 如何觸發回收機制（垃圾回收，garbage collection）
+## 5. 確認視窗與修改流程（ADR 0009）
+
+### 做法：用一個狀態描述「現在開著哪個視窗」
+`src/App.vue:49-54`
+```ts
+type Dialog =
+  | { type: 'edit'; row: UserRow; draft?: UserInput; serverErrors?: FieldErrors }
+  | { type: 'confirmUpdate'; row: UserRow; input: UserInput }
+  | { type: 'confirmDelete'; row: UserRow }
+  | { type: 'pin'; row: UserRow; index: number }
+  | { type: 'confirmUnpin'; row: UserRow }
+```
+同一時間只會有一個視窗，不需要 5 個 `showXxxDialog` 布林值，也不會出現兩個視窗同時開著的錯誤狀態。
+
+**更新的流程**：編輯表單 →「下一步」→ 確認視窗列出「原本 / 改為」（`App.vue:73-80` 的 `changes`）→「確定更新」才打 API。
+- 後端驗證失敗（422）時，回到編輯表單並標出錯誤欄位（`App.vue:97-103`）。
+- 前後端共用同一份驗證規則（`utils/validate.ts`），前端先擋一次，後端再擋一次。
+
+**共用的執行函式** `App.vue:82-95`：`run()` 統一處理「處理中」狀態、錯誤訊息、成功後關窗並顯示提示。
+
+**原生 `<dialog>`**（`components/BaseDialog.vue`）：`showModal()` 內建焦點鎖定、按 Esc 關閉、背景遮罩，不用自己寫。
+
+### 釘選在前端的部分（ADR 0008）
+釘選的位置合併是後端的工作。前端負責的是：
+- 讓使用者輸入位置並驗證是 1 以上的整數（`components/PinDialog.vue`）。
+- 呼叫 `PUT /api/users/:id/pin`，成功後 `reload()` 從頭查詢（`useUserList.ts:84-92`）。
+- 位置已被別人釘選時，後端回 409，視窗直接顯示錯誤訊息，不關窗。
+- 依 `pinnedAt` 欄位顯示 📌（`UserTable.vue:106`），並切換「釘選 / 取消釘選」按鈕（116-117 行）。
+
+---
+
+## 6. 如何減少 RAM？有沒有用虛擬 DOM？
+
+### 先釐清兩個名詞
+- **虛擬 DOM（virtual DOM）**：Vue 本身的機制。Vue 先在 JS 裡建一棵「描述畫面的物件樹」，和上一次比對差異，只把有變的地方寫進真正的 DOM。這個專案有用到，因為 Vue 就是這樣運作的。
+- **虛擬捲動（virtual scroll）**：我們自己寫的，決定「哪些列要交給 Vue 去畫」。
+
+虛擬 DOM 解決的是「更新時改最少的 DOM」，**不會減少要畫的數量**。把 5,000 列交給 Vue，就會有 5,000 列的虛擬節點和真實 DOM。虛擬捲動先把數量降到約 30 列。
+
+**面試回答模板**：「Vue 有虛擬 DOM，但它解決的是更新效率，不是 DOM 太多。DOM 太多要靠虛擬捲動，只渲染可視範圍。」
+
+### 前端三層省記憶體
+| 層 | 做法 | 位置 | 效果 |
+|---|---|---|---|
+| 傳輸 | 一次只拿 500 筆 | `useUserList.ts:6, 29` | 只持有看過的資料，不是 1,000 萬筆 |
+| 狀態 | `shallowRef`，不替每筆資料建 Proxy | `useUserList.ts:11` | 見第 2 節實測 |
+| 畫面 | 虛擬捲動 | `UserTable.vue:30-45` | DOM 固定約 25–30 列 |
+| 回收 | 清空、取消、卸載時清理 | 見第 7 節 | 不要的東西能被回收 |
+
+---
+
+## 7. 回收機制（垃圾回收，garbage collection）
 
 ### 先講原理（事實）
 JS **沒有**「手動釋放記憶體」的 API。引擎會定期找出「再也沒有人引用的物件」並回收。所以前端能做的是**讓不要的東西變成沒人引用**，以及**少製造垃圾**。
@@ -451,7 +276,6 @@ JS **沒有**「手動釋放記憶體」的 API。引擎會定期找出「再也
 | 虛擬捲動 | `UserTable.vue:45`、`v-for :key="row.id"`（95-96） | 捲出畫面的列，Vue 會卸載它的 DOM 和 vnode |
 | 取消過期請求 | `useUserList.ts:46`、`server.ts:63-69` | 舊請求的結果直接丟掉，事件監聽也移除，不會殘留 |
 | 元件卸載時清理 | `useUserList.ts:95`、`UserTable.vue:58` | 取消請求、`observer.disconnect()`，避免記憶體洩漏（leak：該回收卻一直被引用） |
-| 緩衝區重複使用 | `db.ts:329-333` | 不製造垃圾：每次排序都 `new Uint32Array(1000 萬)` 的話，會不斷產生 40MB 的垃圾等 GC 處理 |
 
 ### 還沒做的：已載入資料的「滑動視窗回收」（ADR 0011 列為待做）
 **目前的限制（事實）**：使用者一路往下捲，`rows` 會一直變長。捲到 5 萬筆，主執行緒就持有 5 萬個物件（推測約 10MB 上下，沒有實測）。DOM 不會變多，但 JS 物件會。
@@ -479,3 +303,30 @@ Chrome DevTools → Memory 分頁：
 2. 捲到 5,000 筆，再拍一張。
 3. 輸入搜尋字（觸發 `reload()` 清空列表），按垃圾桶圖示手動觸發 GC，再拍一張。
 4. 比較三張的 `Object` 數量：第 3 張應該接近第 1 張。如果沒有降下來，用 Comparison 檢視找出是誰還在引用。
+
+---
+
+## 面試自我檢查（每題不看稿講 1 分鐘）
+
+1. 為什麼用 cursor 而不是頁碼？刪除後 cursor 為什麼要減 1？（第 1 節）
+2. 為什麼用 `shallowRef`？為什麼不能直接 push？（第 2 節）
+3. 虛擬捲動怎麼算出要畫哪幾列？為什麼列高要固定？用的是哪個 Observer？（第 3 節）
+4. AbortController 解決什麼問題？為什麼修改類請求不取消？（第 4 節）
+5. 確認視窗的狀態怎麼管理？後端回 422、409 時畫面怎麼處理？（第 5 節）
+6. Vue 的虛擬 DOM 和虛擬捲動差在哪？（第 6 節）
+7. 使用者一路往下捲，記憶體會怎樣？怎麼改善？（第 7 節）
+8. 50 人同時使用，前端能做什麼？（ADR 0011：搜尋防抖、取消過期請求、相同查詢快取、409 版本衝突提示）
+
+---
+
+## 附錄：mock 假後端（不是面試重點）
+
+`src/mock/` 只是為了在沒有真 API 的情況下，用 1,000 萬筆的真實規模測試上面的前端行為。正式環境刪掉 `main.ts` 的 `setupMock()` 那一行就會改打真的 `/api/users`。
+
+被問到時可以這樣說：「為了讓 mock 在瀏覽器裡撐得住千萬筆，我用欄式 TypedArray 存資料（約 70MB），排序用計數排序，並放在 Web Worker 裡，不讓主畫面卡住。正式環境這些是資料庫和索引的工作。」
+
+| 檔案 | 內容 | ADR |
+|---|---|---|
+| `mock/db.ts` | 欄式 TypedArray、字典編碼、計數排序、查詢快照、釘選合併 | 0004、0005、0008 |
+| `mock/worker.ts`、`mock/backend.ts` | 把 db 放進 Web Worker | 0006 |
+| `mock/server.ts` | 假的 fetch：路由、150–400ms 延遲、可被 signal 取消，回傳真的 Response | 0010 |

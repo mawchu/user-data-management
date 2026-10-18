@@ -1,4 +1,8 @@
-# 使用者資料管理後臺（Vue 3 + 千萬筆 Mock API）
+# 使用者資料管理後臺（Vue 3）
+
+重點是前端：拿到 API 回傳的資料後，每次 500 筆無限捲動、虛擬捲動、取消過期請求，以及刪除、更新、釘選的確認流程。沒有真 API，所以附了一個能撐千萬筆的 mock 後端，用真實規模來驗證這些前端行為。
+
+前端實作的解題思路與程式碼位置見 [docs/code-map.md](docs/code-map.md)。
 
 ## 執行
 ```bash
@@ -26,18 +30,24 @@ node e2e/run.mjs     # 瀏覽器端對端測試（需先啟動 preview；Chromiu
 ## 架構
 ```
 src/
-  types/user.ts            資料與 API 型別
-  utils/validate.ts        前後端共用的欄位驗證
-  mock/db.ts               mock 後端：千萬筆記憶體資料庫（排序、搜尋、釘選、增刪改）
-  mock/worker.ts           把 db 放進 Web Worker（背景執行緒），畫面不會卡
-  mock/server.ts           假的 fetch：依「方法 + 網址」分派、模擬 150–400ms 網路延遲、支援 AbortSignal，回傳真正的 Response
-  mock/setup.ts            把 API 層的 fetch 換成 mock（main.ts 呼叫）
-  api/http.ts              共用 request()：fetch + signal + 依狀態碼丟 HttpError
-  api/users.ts             各支 API 的網址與參數
-  composables/useUserList.ts  列表狀態：分批載入、排序、搜尋、刪改後同步
-  components/              UserTable（虛擬捲動表格）、各種對話框
-tests/db.test.ts           與「最直白的參考實作」逐筆對照
-e2e/run.mjs                Playwright 實際操作瀏覽器
+  # 前端
+  components/UserTable.vue    虛擬捲動表格：只渲染看得到的列，快到底時提早載入下一批
+  components/*Dialog.vue      編輯、確認、釘選對話框（原生 <dialog>）
+  App.vue                     對話框流程、搜尋防抖
+  composables/useUserList.ts  列表狀態：每次 500 筆、shallowRef、AbortController、刪改後同步
+  api/http.ts                 共用 request()：fetch + signal + 依狀態碼丟 HttpError
+  api/users.ts                各支 API 的網址與參數
+  types/user.ts               資料與 API 型別
+  utils/validate.ts           前後端共用的欄位驗證
+
+  # 測試用 mock 後端（接真 API 時不需要）
+  mock/setup.ts               把 API 層的 fetch 換成 mock（main.ts 呼叫）
+  mock/server.ts              假的 fetch：依「方法 + 網址」分派、模擬 150–400ms 網路延遲、支援 AbortSignal
+  mock/worker.ts, backend.ts  把 db 放進 Web Worker
+  mock/db.ts                  千萬筆記憶體資料庫
+
+tests/                        單元測試
+e2e/run.mjs                   Playwright 實際操作瀏覽器
 ```
 
 ### 打 API 的方式
@@ -61,17 +71,28 @@ DELETE /api/users/:id/pin
 ```
 
 ## 設計決定
+
+### 前端
 | 決定 | 理由 | 代價 |
 |---|---|---|
-| 每欄存成 TypedArray，字串只存字典編號 | 1,000 萬列約 70MB；字串物件要好幾 GB | 字串欄位的不同值有上限（姓名 65,535 種、職位/地點各 255 種），超過回 507 |
-| 排序用 counting sort（計數排序） | 每欄不同值很少，O(n) 一次掃完，約 0.2–0.5 秒 | 只適用值域小的欄位；真實資料要靠資料庫索引 |
-| 搜尋先比對「字典」再查表掃描 | 每種字串只比對一次，掃 1,000 萬列約 0.1–0.2 秒 | 只支援「包含」比對 |
-| cursor = 查詢結果快照中的位置 | 捲動途中資料不會跳動；刪除時前端與 mock 同步調整位置 | 真實後端應改用 keyset（排序值 + id）游標 |
+| 自己寫虛擬捲動，不引入 UI 套件 | 不論載入幾筆，DOM 固定約 25–30 列；能說明原理、少一個大型依賴 | 列高必須固定 |
+| 列表用 `shallowRef`，修改時換新陣列 | 上萬筆資料不需要深層響應式；實測 concat、findIndex 快 5–20 倍 | 不能直接改 `rows[i].x`，要用 concat / toSpliced / with |
+| 換搜尋或排序時用 AbortController 取消舊查詢 | 避免慢的舊結果晚回來蓋掉新結果 | — |
+| 修改類請求不取消 | 送出後後端可能已經改好，取消只會讓畫面和資料不一致 | — |
+| 刪除後 cursor 往前一格 | 後端結果少一筆，不修正就會漏掉一筆 | 依賴「cursor 是位置」；改用 keyset cursor 就不需要 |
 | 釘選位置超過資料量時排在最後 | 例如搜尋後只剩 3 筆，釘在第 100 列的會排第 4 | — |
 | 搜尋不符合的釘選列不顯示 | 搜尋是「篩選」，顯示不相符的列會令人困惑 | 若需求是「釘選列永遠顯示」需改一行 |
 | 同一位置只能釘一筆 | 避免兩筆搶同一列時順序不明 | 要換位置需先取消原本的 |
 | 編輯後的列先留在原位，重新查詢才依新值排序 | 改完資料列突然跳走，使用者會找不到 | 畫面短暫不完全符合排序 |
+| 搜尋停止輸入 300ms 才查詢（防抖） | 每打一個字就查一次，會產生大量無用請求 | 查詢慢 300ms 才開始 |
+
+### mock 後端（只為了測試，正式環境由資料庫負責）
+| 決定 | 理由 | 代價 |
+|---|---|---|
 | mock 放 Web Worker，前面包一層假 fetch | 千萬筆運算不卡畫面；呼叫端仍是標準 fetch 寫法，換真後端只刪一行 | 瀏覽器 Network 面板看不到請求 |
+| 每欄存成 TypedArray，字串只存字典編號 | 1,000 萬列約 70MB；用物件要 1GB 以上 | 字串欄位的不同值有上限，超過回 507 |
+| 排序用計數排序，搜尋先比對字典 | 在瀏覽器裡把排序壓在 0.2–0.5 秒、搜尋壓在 0.1–0.2 秒 | 只適用值域小的欄位 |
+| cursor = 查詢結果快照中的位置 | 捲動途中資料不會跳動 | 真實後端應改用 keyset（排序值 + id）游標 |
 
 ## 已驗證
 - `npm test`：33 項通過（資料層 26 項、mock fetch 與取消 6 項、列表取消 1 項）。資料層測五個欄位升/降冪、7 組搜尋字、釘選、刪除、更新、錯誤處理，都和參考實作逐筆比對。
