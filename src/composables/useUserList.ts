@@ -32,8 +32,8 @@ export function useUserList() {
       total.value = res.total
       cursor = res.nextCursor
       hasMore.value = res.hasMore
-    } catch (e) {
-      if (!isAbortError(e)) error.value = (e as Error).message
+    } catch (requestError) {
+      if (!isAbortError(requestError)) error.value = (requestError as Error).message
     } finally {
       if (controller === current) {
         loading.value = false
@@ -63,9 +63,9 @@ export function useUserList() {
 
   async function removeRow(id: number) {
     await usersApi.remove(id)
-    const i = rows.value.findIndex((r) => r.id === id)
-    if (i >= 0) {
-      rows.value = rows.value.toSpliced(i, 1)
+    const rowIndex = rows.value.findIndex((row) => row.id === id)
+    if (rowIndex >= 0) {
+      rows.value = rows.value.toSpliced(rowIndex, 1)
       // 後端快照也少了這一列，游標往前一格，下一批才不會漏掉資料
       if (cursor) cursor = String(Number(cursor) - 1)
     }
@@ -74,9 +74,9 @@ export function useUserList() {
 
   async function updateRow(id: number, input: UserInput) {
     const updated = await usersApi.update(id, input)
-    const i = rows.value.findIndex((r) => r.id === id)
-    if (i >= 0) {
-      rows.value = rows.value.with(i, updated)
+    const rowIndex = rows.value.findIndex((row) => row.id === id)
+    if (rowIndex >= 0) {
+      rows.value = rows.value.with(rowIndex, updated)
     }
     return updated
   }

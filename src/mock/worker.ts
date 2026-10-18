@@ -16,8 +16,8 @@ export type MockResponse =
 
 let db: UserDb | null = null
 
-self.onmessage = (e: MessageEvent<{ id: number } & MockRequest>) => {
-  const { id, method, args } = e.data
+self.onmessage = (event: MessageEvent<{ id: number } & MockRequest>) => {
+  const { id, method, args } = event.data
   try {
     let result: unknown
     if (method === 'init') {
@@ -25,12 +25,12 @@ self.onmessage = (e: MessageEvent<{ id: number } & MockRequest>) => {
       result = { total: db.count }
     } else {
       if (!db) throw new ApiError(503, 'mock 資料庫尚未初始化')
-      result = (db[method] as (...a: unknown[]) => unknown)(...args)
+      result = (db[method] as (...methodArgs: unknown[]) => unknown)(...args)
     }
     self.postMessage({ id, ok: true, result } satisfies MockResponse)
-  } catch (err) {
-    const status = err instanceof ApiError ? err.status : 500
-    const details = err instanceof ApiError ? err.details : undefined
-    self.postMessage({ id, ok: false, status, message: (err as Error).message, details } satisfies MockResponse)
+  } catch (error) {
+    const status = error instanceof ApiError ? error.status : 500
+    const details = error instanceof ApiError ? error.details : undefined
+    self.postMessage({ id, ok: false, status, message: (error as Error).message, details } satisfies MockResponse)
   }
 }

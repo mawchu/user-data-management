@@ -3,14 +3,14 @@ import { onMounted, ref } from 'vue'
 
 defineProps<{ title: string }>()
 const emit = defineEmits<{ close: [] }>()
-const el = ref<HTMLDialogElement>()
+const dialogElement = ref<HTMLDialogElement>()
 
 // 原生 <dialog>：showModal() 內建焦點鎖定、Esc 關閉與背景遮罩
-onMounted(() => el.value?.showModal())
+onMounted(() => dialogElement.value?.showModal())
 </script>
 
 <template>
-  <dialog ref="el" class="dialog" @cancel.prevent="emit('close')" @click.self="emit('close')">
+  <dialog ref="dialogElement" class="dialog" @cancel.prevent="emit('close')" @click.self="emit('close')">
     <div class="panel">
       <h2>{{ title }}</h2>
       <slot />

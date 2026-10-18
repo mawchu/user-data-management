@@ -3,7 +3,7 @@ import { ApiError, UserDb } from './db'
 import type { MockRequest, MockResponse } from './worker'
 
 export interface MockBackend {
-  call(req: MockRequest): Promise<unknown>
+  call(request: MockRequest): Promise<unknown>
 }
 
 /** 測試用：同一個執行緒直接呼叫 UserDb */
@@ -11,7 +11,7 @@ export function createDirectBackend(db: UserDb): MockBackend {
   return {
     async call({ method, args }) {
       if (method === 'init') return { total: db.count }
-      return (db[method] as (...a: unknown[]) => unknown)(...args)
+      return (db[method] as (...methodArgs: unknown[]) => unknown)(...args)
     },
   }
 }
@@ -19,22 +19,22 @@ export function createDirectBackend(db: UserDb): MockBackend {
 /** 瀏覽器用：資料庫跑在 Web Worker，產生與排序千萬筆時畫面不會卡住 */
 export function createWorkerBackend(size: number): { backend: MockBackend; ready: Promise<unknown> } {
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
-  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>()
-  let seq = 0
-  worker.onmessage = (e: MessageEvent<MockResponse>) => {
-    const msg = e.data
-    const p = pending.get(msg.id)
-    if (!p) return
-    pending.delete(msg.id)
-    if (msg.ok) p.resolve(msg.result)
-    else p.reject(new ApiError(msg.status, msg.message, msg.details))
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason: unknown) => void }>()
+  let lastRequestId = 0
+  worker.onmessage = (event: MessageEvent<MockResponse>) => {
+    const response = event.data
+    const handlers = pending.get(response.id)
+    if (!handlers) return
+    pending.delete(response.id)
+    if (response.ok) handlers.resolve(response.result)
+    else handlers.reject(new ApiError(response.status, response.message, response.details))
   }
   const backend: MockBackend = {
-    call(req) {
-      const id = ++seq
+    call(request) {
+      const id = ++lastRequestId
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject })
-        worker.postMessage({ id, ...req })
+        worker.postMessage({ id, ...request })
       })
     },
   }

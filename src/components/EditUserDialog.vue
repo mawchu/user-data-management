@@ -35,18 +35,18 @@ function submit() {
 <template>
   <BaseDialog :title="`編輯使用者 #${row.id}`" @close="emit('cancel')">
     <form id="edit-user-form" class="form" novalidate @submit.prevent="submit">
-      <label v-for="f in FIELDS" :key="f.key" class="field">
-        <span>{{ f.label }}</span>
+      <label v-for="field in FIELDS" :key="field.key" class="field">
+        <span>{{ field.label }}</span>
         <input
-          v-model="form[f.key]"
-          :name="f.key"
-          :type="f.type"
-          :min="f.key === 'age' ? AGE_MIN : f.key === 'dateStart' ? DATE_MIN : undefined"
-          :max="f.key === 'age' ? AGE_MAX : f.key === 'dateStart' ? DATE_MAX : undefined"
-          :step="f.key === 'age' ? 1 : undefined"
-          :aria-invalid="!!errors[f.key]"
+          v-model="form[field.key]"
+          :name="field.key"
+          :type="field.type"
+          :min="field.key === 'age' ? AGE_MIN : field.key === 'dateStart' ? DATE_MIN : undefined"
+          :max="field.key === 'age' ? AGE_MAX : field.key === 'dateStart' ? DATE_MAX : undefined"
+          :step="field.key === 'age' ? 1 : undefined"
+          :aria-invalid="!!errors[field.key]"
         />
-        <small v-if="errors[f.key]" class="error">{{ errors[f.key] }}</small>
+        <small v-if="errors[field.key]" class="error">{{ errors[field.key] }}</small>
       </label>
     </form>
     <template #buttons>

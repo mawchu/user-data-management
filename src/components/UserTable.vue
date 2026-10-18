@@ -80,10 +80,10 @@ function ariaSort(key: SortKey) {
     <div class="row head" role="row">
       <div class="cell num" role="columnheader">列</div>
       <div class="cell id" role="columnheader">ID</div>
-      <div v-for="col in COLUMNS" :key="col.key" class="cell" role="columnheader" :aria-sort="ariaSort(col.key)">
-        <button class="sort" :class="{ active: sortBy === col.key }" @click="emit('sort', col.key)">
-          {{ col.label }}
-          <span class="arrow" aria-hidden="true">{{ sortBy !== col.key ? '↕' : order === 'asc' ? '↑' : '↓' }}</span>
+      <div v-for="column in COLUMNS" :key="column.key" class="cell" role="columnheader" :aria-sort="ariaSort(column.key)">
+        <button class="sort" :class="{ active: sortBy === column.key }" @click="emit('sort', column.key)">
+          {{ column.label }}
+          <span class="arrow" aria-hidden="true">{{ sortBy !== column.key ? '↕' : order === 'asc' ? '↑' : '↓' }}</span>
         </button>
       </div>
       <div class="cell actions" role="columnheader">操作</div>
@@ -92,17 +92,17 @@ function ariaSort(key: SortKey) {
     <div class="body" :style="{ height: `${rows.length * ROW_HEIGHT}px` }">
       <div class="window" :style="{ transform: `translateY(${start * ROW_HEIGHT}px)` }">
         <div
-          v-for="(row, i) in visibleRows"
+          v-for="(row, offset) in visibleRows"
           :key="row.id"
           class="row"
           :class="{ pinned: row.pinnedAt !== null, selected: selectedId === row.id }"
           role="row"
-          :aria-rowindex="start + i + 1"
+          :aria-rowindex="start + offset + 1"
           :data-id="row.id"
           @click="selectedId = row.id"
         >
           <div class="cell num" role="cell">
-            {{ (start + i + 1).toLocaleString() }}
+            {{ (start + offset + 1).toLocaleString() }}
             <span v-if="row.pinnedAt !== null" class="pin-badge" :title="`釘選在第 ${row.pinnedAt} 列`">📌</span>
           </div>
           <div class="cell id" role="cell">{{ row.id }}</div>

@@ -14,7 +14,7 @@ export interface MockFetchOptions {
   onAbort?: (method: string, url: string) => void
 }
 
-type Route = { method: string; pattern: RegExp; toRequest: (m: RegExpMatchArray, url: URL, body: any) => MockRequest; status?: number }
+type Route = { method: string; pattern: RegExp; toRequest: (match: RegExpMatchArray, url: URL, body: any) => MockRequest; status?: number }
 
 const SORT_KEYS: SortKey[] = ['userName', 'position', 'location', 'age', 'dateStart']
 
@@ -22,35 +22,35 @@ const ROUTES: Route[] = [
   {
     method: 'GET',
     pattern: /^\/api\/users$/,
-    toRequest: (_m, url) => {
-      const p = url.searchParams
-      const sortBy = p.get('sortBy') as SortKey | null
+    toRequest: (_match, url) => {
+      const params = url.searchParams
+      const sortBy = params.get('sortBy') as SortKey | null
       const query: UserListQuery = {
-        q: p.get('q') ?? '',
+        q: params.get('q') ?? '',
         sortBy: sortBy && SORT_KEYS.includes(sortBy) ? sortBy : null,
-        order: p.get('order') === 'desc' ? 'desc' : 'asc',
-        cursor: p.get('cursor'),
-        limit: p.has('limit') ? Number(p.get('limit')) : undefined,
+        order: params.get('order') === 'desc' ? 'desc' : 'asc',
+        cursor: params.get('cursor'),
+        limit: params.has('limit') ? Number(params.get('limit')) : undefined,
       }
       return { method: 'list', args: [query] }
     },
   },
-  { method: 'PATCH', pattern: /^\/api\/users\/(\d+)$/, toRequest: (m, _u, body) => ({ method: 'update', args: [Number(m[1]), body] }) },
-  { method: 'DELETE', pattern: /^\/api\/users\/(\d+)$/, toRequest: (m) => ({ method: 'remove', args: [Number(m[1])] }), status: 204 },
-  { method: 'PUT', pattern: /^\/api\/users\/(\d+)\/pin$/, toRequest: (m, _u, body) => ({ method: 'pin', args: [Number(m[1]), Number(body?.position)] }) },
-  { method: 'DELETE', pattern: /^\/api\/users\/(\d+)\/pin$/, toRequest: (m) => ({ method: 'unpin', args: [Number(m[1])] }) },
+  { method: 'PATCH', pattern: /^\/api\/users\/(\d+)$/, toRequest: (match, _url, body) => ({ method: 'update', args: [Number(match[1]), body] }) },
+  { method: 'DELETE', pattern: /^\/api\/users\/(\d+)$/, toRequest: (match) => ({ method: 'remove', args: [Number(match[1])] }), status: 204 },
+  { method: 'PUT', pattern: /^\/api\/users\/(\d+)\/pin$/, toRequest: (match, _url, body) => ({ method: 'pin', args: [Number(match[1]), Number(body?.position)] }) },
+  { method: 'DELETE', pattern: /^\/api\/users\/(\d+)\/pin$/, toRequest: (match) => ({ method: 'unpin', args: [Number(match[1])] }) },
 ]
 
 const abortError = () => new DOMException('The operation was aborted.', 'AbortError')
 
 /** 可被 signal 中斷的等待 */
-function sleep(ms: number, signal?: AbortSignal | null) {
+function sleep(durationMs: number, signal?: AbortSignal | null) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) return reject(abortError())
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', onAbort)
       resolve()
-    }, ms)
+    }, durationMs)
     const onAbort = () => {
       clearTimeout(timer)
       reject(abortError())
@@ -84,21 +84,21 @@ export function createMockFetch(backend: MockBackend, options: MockFetchOptions 
       // 1. 模擬「請求在網路上傳送」：這段時間內取消，後端完全不會收到
       await sleep(minMs + Math.random() * (maxMs - minMs), signal)
 
-      const route = ROUTES.find((r) => r.method === method && r.pattern.test(url.pathname))
+      const route = ROUTES.find((candidate) => candidate.method === method && candidate.pattern.test(url.pathname))
       if (!route) return json(404, { message: `找不到 ${method} ${url.pathname}` })
       const body = typeof init.body === 'string' && init.body ? JSON.parse(init.body) : undefined
-      const req = route.toRequest(url.pathname.match(route.pattern)!, url, body)
+      const request = route.toRequest(url.pathname.match(route.pattern)!, url, body)
 
       // 2. 後端已在處理：取消後瀏覽器不再等結果，但後端可能已經執行完（真實 HTTP 也是如此）
-      const result = await raceAbort(backend.call(req), signal)
+      const result = await raceAbort(backend.call(request), signal)
       return route.status === 204 ? new Response(null, { status: 204 }) : json(200, result)
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
         options.onAbort?.(method, input)
-        throw e
+        throw error
       }
-      if (e instanceof ApiError) return json(e.status, { message: e.message, details: e.details })
-      return json(500, { message: (e as Error).message })
+      if (error instanceof ApiError) return json(error.status, { message: error.message, details: error.details })
+      return json(500, { message: (error as Error).message })
     }
   }
 }

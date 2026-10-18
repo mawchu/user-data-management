@@ -21,9 +21,9 @@ const toast = ref<string | null>(null)
 const apiReady = inject<Promise<unknown>>('apiReady', Promise.resolve())
 
 onMounted(async () => {
-  const t = performance.now()
+  const bootStart = performance.now()
   await apiReady
-  bootMs.value = Math.round(performance.now() - t)
+  bootMs.value = Math.round(performance.now() - bootStart)
   booting.value = false
   await list.reload()
 })
@@ -56,9 +56,9 @@ const dialog = shallowRef<Dialog | null>(null)
 const busy = ref(false)
 const dialogError = ref<string | null>(null)
 
-function open(d: Dialog) {
+function open(next: Dialog) {
   dialogError.value = null
-  dialog.value = d
+  dialog.value = next
 }
 function close() {
   dialog.value = null
@@ -72,11 +72,11 @@ const FIELD_LABELS: Record<keyof UserInput, string> = {
   dateStart: 'Date Start',
 }
 const changes = computed(() => {
-  const d = dialog.value
-  if (d?.type !== 'confirmUpdate') return []
+  const current = dialog.value
+  if (current?.type !== 'confirmUpdate') return []
   return (Object.keys(FIELD_LABELS) as (keyof UserInput)[])
-    .filter((k) => d.row[k] !== d.input[k])
-    .map((k) => ({ label: FIELD_LABELS[k], from: d.row[k], to: d.input[k] }))
+    .filter((field) => current.row[field] !== current.input[field])
+    .map((field) => ({ label: FIELD_LABELS[field], from: current.row[field], to: current.input[field] }))
 })
 
 async function run(action: () => Promise<unknown>, done: string) {
@@ -86,19 +86,19 @@ async function run(action: () => Promise<unknown>, done: string) {
     await action()
     close()
     notify(done)
-  } catch (e) {
-    dialogError.value = (e as Error).message
-    return e
+  } catch (actionError) {
+    dialogError.value = (actionError as Error).message
+    return actionError
   } finally {
     busy.value = false
   }
 }
 
-async function confirmUpdate(d: Extract<Dialog, { type: 'confirmUpdate' }>) {
-  const err = await run(() => list.updateRow(d.row.id, d.input), `已更新 #${d.row.id}`)
+async function confirmUpdate(pending: Extract<Dialog, { type: 'confirmUpdate' }>) {
+  const updateError = await run(() => list.updateRow(pending.row.id, pending.input), `已更新 #${pending.row.id}`)
   // 後端驗證失敗：回到編輯表單並標出錯誤欄位
-  if (err instanceof HttpError && err.status === 422) {
-    open({ type: 'edit', row: d.row, draft: d.input, serverErrors: err.details as FieldErrors })
+  if (updateError instanceof HttpError && updateError.status === 422) {
+    open({ type: 'edit', row: pending.row, draft: pending.input, serverErrors: updateError.details as FieldErrors })
   }
 }
 
@@ -210,7 +210,7 @@ function onPin(row: UserRow) {
       :busy="busy"
       :error="dialogError"
       @cancel="close"
-      @submit="(p) => run(() => list.pinRow(dialog!.row.id, p), `已把 #${dialog!.row.id} 釘選在第 ${p} 列`)"
+      @submit="(position) => run(() => list.pinRow(dialog!.row.id, position), `已把 #${dialog!.row.id} 釘選在第 ${position} 列`)"
     />
 
     <ConfirmDialog

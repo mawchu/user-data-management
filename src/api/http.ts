@@ -5,15 +5,15 @@ export class HttpError extends Error {
   }
 }
 
-export const isAbortError = (e: unknown) => e instanceof DOMException && e.name === 'AbortError'
+export const isAbortError = (error: unknown) => error instanceof DOMException && error.name === 'AbortError'
 
 export type Transport = (input: string, init?: RequestInit) => Promise<Response>
 
 let transport: Transport = (input, init) => fetch(input, init)
 
 /** 換掉底層的 fetch。目前在 main.ts 換成 mock；接真後端時刪掉那一行即可 */
-export function setTransport(t: Transport) {
-  transport = t
+export function setTransport(nextTransport: Transport) {
+  transport = nextTransport
 }
 
 export async function request<T>(
@@ -21,14 +21,14 @@ export async function request<T>(
   url: string,
   options: { body?: unknown; signal?: AbortSignal } = {},
 ): Promise<T> {
-  const res = await transport(url, {
+  const response = await transport(url, {
     method,
     signal: options.signal,
     headers: options.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   })
-  if (res.status === 204) return undefined as T
-  const data = await res.json().catch(() => null)
-  if (!res.ok) throw new HttpError(res.status, data?.message ?? `HTTP ${res.status}`, data?.details)
+  if (response.status === 204) return undefined as T
+  const data = await response.json().catch(() => null)
+  if (!response.ok) throw new HttpError(response.status, data?.message ?? `HTTP ${response.status}`, data?.details)
   return data as T
 }

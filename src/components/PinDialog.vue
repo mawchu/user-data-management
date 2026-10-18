@@ -10,13 +10,13 @@ const position = ref(String(props.currentIndex))
 const localError = ref<string | null>(null)
 
 function submit() {
-  const n = Number(position.value)
-  if (!Number.isInteger(n) || n < 1) {
+  const targetPosition = Number(position.value)
+  if (!Number.isInteger(targetPosition) || targetPosition < 1) {
     localError.value = '請輸入 1 以上的整數'
     return
   }
   localError.value = null
-  emit('submit', n)
+  emit('submit', targetPosition)
 }
 </script>
 

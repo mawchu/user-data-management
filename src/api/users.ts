@@ -10,15 +10,15 @@ import { request } from './http'
 import type { UserInput, UserListQuery, UserListResponse, UserRow } from '../types/user'
 
 function toSearchParams(query: UserListQuery) {
-  const p = new URLSearchParams()
-  if (query.q) p.set('q', query.q)
+  const params = new URLSearchParams()
+  if (query.q) params.set('q', query.q)
   if (query.sortBy) {
-    p.set('sortBy', query.sortBy)
-    p.set('order', query.order ?? 'asc')
+    params.set('sortBy', query.sortBy)
+    params.set('order', query.order ?? 'asc')
   }
-  if (query.cursor) p.set('cursor', query.cursor)
-  if (query.limit) p.set('limit', String(query.limit))
-  return p
+  if (query.cursor) params.set('cursor', query.cursor)
+  if (query.limit) params.set('limit', String(query.limit))
+  return params
 }
 
 export const usersApi = {
