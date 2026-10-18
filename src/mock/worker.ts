@@ -12,7 +12,13 @@ export type MockRequest =
 
 export type MockResponse =
   | { id: number; ok: true; result: unknown }
-  | { id: number; ok: false; status: number; message: string; details?: unknown }
+  | {
+      id: number
+      ok: false
+      status: number
+      message: string
+      details?: unknown
+    }
 
 let db: UserDb | null = null
 
@@ -31,6 +37,12 @@ self.onmessage = (event: MessageEvent<{ id: number } & MockRequest>) => {
   } catch (error) {
     const status = error instanceof ApiError ? error.status : 500
     const details = error instanceof ApiError ? error.details : undefined
-    self.postMessage({ id, ok: false, status, message: (error as Error).message, details } satisfies MockResponse)
+    self.postMessage({
+      id,
+      ok: false,
+      status,
+      message: (error as Error).message,
+      details,
+    } satisfies MockResponse)
   }
 }

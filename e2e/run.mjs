@@ -4,7 +4,11 @@ import assert from 'node:assert/strict'
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:4173/'
 const OUT = process.env.SHOTS ?? 'e2e/screenshots'
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' })
+const browser = await chromium.launch({
+  executablePath:
+    process.env.CHROMIUM ??
+    '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+})
 const page = await browser.newPage({ viewport: { width: 1360, height: 820 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message))
@@ -22,13 +26,28 @@ const step = (name) => writeSync(1, `✓ ${name}\n`)
 const rowsData = () =>
   page.$$eval('.body .row', (els) =>
     els.map((el) => {
-      const c = [...el.querySelectorAll('.cell')].map((x) => x.textContent.trim())
-      return { num: c[0], id: Number(c[1]), userName: c[2], position: c[3], location: c[4], age: Number(c[5]), dateStart: c[6] }
+      const c = [...el.querySelectorAll('.cell')].map((x) =>
+        x.textContent.trim(),
+      )
+      return {
+        num: c[0],
+        id: Number(c[1]),
+        userName: c[2],
+        position: c[3],
+        location: c[4],
+        age: Number(c[5]),
+        dateStart: c[6],
+      }
     }),
   )
-const total = async () => Number((await page.textContent('[data-testid=total]')).replace(/,/g, ''))
-const loaded = async () => Number((await page.textContent('[data-testid=loaded]')).replace(/,/g, ''))
-const waitIdle = () => page.waitForFunction(() => !document.querySelector('.footer')?.textContent.includes('載入中'))
+const total = async () =>
+  Number((await page.textContent('[data-testid=total]')).replace(/,/g, ''))
+const loaded = async () =>
+  Number((await page.textContent('[data-testid=loaded]')).replace(/,/g, ''))
+const waitIdle = () =>
+  page.waitForFunction(
+    () => !document.querySelector('.footer')?.textContent.includes('載入中'),
+  )
 
 const t0 = Date.now()
 await page.goto(BASE)
@@ -44,7 +63,12 @@ await page.screenshot({ path: `${OUT}/1-list.png` })
 
 // 無限捲動
 await page.$eval('.scroller', (el) => (el.scrollTop = el.scrollHeight))
-await page.waitForFunction(() => document.querySelector('[data-testid=loaded]').textContent.replace(/,/g, '') === '1000')
+await page.waitForFunction(
+  () =>
+    document
+      .querySelector('[data-testid=loaded]')
+      .textContent.replace(/,/g, '') === '1000',
+)
 await waitIdle()
 const afterScroll = await rowsData()
 assert.ok(afterScroll.length < 60)
@@ -60,40 +84,85 @@ const sortBy = async (label) => {
 }
 await sortBy('Age')
 let r = await rowsData()
-assert.ok(r.every((x, i) => i === 0 || r[i - 1].age <= x.age) && r[0].age === 20, 'age asc')
+assert.ok(
+  r.every((x, i) => i === 0 || r[i - 1].age <= x.age) && r[0].age === 20,
+  'age asc',
+)
 await sortBy('Age')
 r = await rowsData()
-assert.ok(r.every((x, i) => i === 0 || r[i - 1].age >= x.age) && r[0].age === 65, 'age desc')
+assert.ok(
+  r.every((x, i) => i === 0 || r[i - 1].age >= x.age) && r[0].age === 65,
+  'age desc',
+)
 step(`Age 升冪首列 20 歲、降冪首列 ${r[0].age} 歲`)
 await sortBy('Age') // 回到未排序
-for (const [label, key] of [['User name', 'userName'], ['Position', 'position'], ['Location', 'location'], ['Date Start', 'dateStart']]) {
+for (const [label, key] of [
+  ['User name', 'userName'],
+  ['Position', 'position'],
+  ['Location', 'location'],
+  ['Date Start', 'dateStart'],
+]) {
   await sortBy(label)
   r = await rowsData()
-  const sorted = r.every((x, i) => i === 0 || r[i - 1][key].localeCompare(x[key], 'en', { sensitivity: 'base', numeric: true }) <= 0)
+  const sorted = r.every(
+    (x, i) =>
+      i === 0 ||
+      r[i - 1][key].localeCompare(x[key], 'en', {
+        sensitivity: 'base',
+        numeric: true,
+      }) <= 0,
+  )
   assert.ok(sorted, `${key} asc`)
   await sortBy(label)
   r = await rowsData()
-  assert.ok(r.every((x, i) => i === 0 || r[i - 1][key].localeCompare(x[key], 'en', { sensitivity: 'base', numeric: true }) >= 0), `${key} desc`)
+  assert.ok(
+    r.every(
+      (x, i) =>
+        i === 0 ||
+        r[i - 1][key].localeCompare(x[key], 'en', {
+          sensitivity: 'base',
+          numeric: true,
+        }) >= 0,
+    ),
+    `${key} desc`,
+  )
   await sortBy(label)
 }
 step('五個欄位都能升冪/降冪排序，畫面上的列順序正確')
 
 // 搜尋
 await page.fill('.search', 'chen')
-await page.waitForFunction(() => document.querySelector('[data-testid=total]').textContent !== '10,000,000')
+await page.waitForFunction(
+  () =>
+    document.querySelector('[data-testid=total]').textContent !== '10,000,000',
+)
 await waitIdle()
 r = await rowsData()
-assert.ok(r.length > 0 && r.every((x) => [x.userName, x.position, x.location, String(x.age), x.dateStart].some((v) => v.toLowerCase().includes('chen'))))
-step(`搜尋 "chen"：符合 ${(await total()).toLocaleString()} 筆，畫面上每列都含 chen`)
+assert.ok(
+  r.length > 0 &&
+    r.every((x) =>
+      [x.userName, x.position, x.location, String(x.age), x.dateStart].some(
+        (v) => v.toLowerCase().includes('chen'),
+      ),
+    ),
+)
+step(
+  `搜尋 "chen"：符合 ${(await total()).toLocaleString()} 筆，畫面上每列都含 chen`,
+)
 await page.fill('.search', '2015-03')
 await page.waitForTimeout(500)
 await waitIdle()
 r = await rowsData()
 assert.ok(r.every((x) => x.dateStart.startsWith('2015-03')))
-step(`搜尋 "2015-03"：符合 ${(await total()).toLocaleString()} 筆，畫面上每列日期都是 2015-03`)
+step(
+  `搜尋 "2015-03"：符合 ${(await total()).toLocaleString()} 筆，畫面上每列日期都是 2015-03`,
+)
 await page.screenshot({ path: `${OUT}/2-search.png` })
 await page.fill('.search', '')
-await page.waitForFunction(() => document.querySelector('[data-testid=total]').textContent === '10,000,000')
+await page.waitForFunction(
+  () =>
+    document.querySelector('[data-testid=total]').textContent === '10,000,000',
+)
 await waitIdle()
 
 // 取消過期請求：連續快速點表頭，前面的請求應該被取消
@@ -104,11 +173,22 @@ await page.click('.sort:has-text("Location")')
 await page.waitForTimeout(100)
 await waitIdle()
 const abortedAfter = Number(await page.textContent('[data-testid=aborted]'))
-assert.ok(abortedAfter - abortedBefore >= 2, `aborted ${abortedBefore} -> ${abortedAfter}`)
+assert.ok(
+  abortedAfter - abortedBefore >= 2,
+  `aborted ${abortedBefore} -> ${abortedAfter}`,
+)
 r = await rowsData()
-assert.deepEqual(r.slice(0, 5).map((x) => x.id), [1, 2, 3, 4, 5]) // 取消排序後回到 id 順序
-assert.equal(await page.getAttribute('.row.head [aria-sort="none"] >> nth=2', 'aria-sort'), 'none')
-step(`快速連點 Location 三次：取消了 ${abortedAfter - abortedBefore} 個過期請求，畫面停在最後一次（取消排序）的結果`)
+assert.deepEqual(
+  r.slice(0, 5).map((x) => x.id),
+  [1, 2, 3, 4, 5],
+) // 取消排序後回到 id 順序
+assert.equal(
+  await page.getAttribute('.row.head [aria-sort="none"] >> nth=2', 'aria-sort'),
+  'none',
+)
+step(
+  `快速連點 Location 三次：取消了 ${abortedAfter - abortedBefore} 個過期請求，畫面停在最後一次（取消排序）的結果`,
+)
 
 // 釘選
 r = await rowsData()
@@ -131,7 +211,9 @@ for (const label of ['Age', 'User name', 'Date Start']) {
   await page.screenshot({ path: `${OUT}/3-pinned.png` })
   await sortBy(label)
 }
-step(`把 #${target.id} 釘選在第 3 列，Age／User name／Date Start 升降冪排序後都還在第 3 列`)
+step(
+  `把 #${target.id} 釘選在第 3 列，Age／User name／Date Start 升降冪排序後都還在第 3 列`,
+)
 
 // 同位置重複釘選
 r = await rowsData()
@@ -169,14 +251,21 @@ r = await rowsData()
 const edited = r.find((x) => x.id === editRow.id)
 assert.equal(edited.userName, 'Mawchu Demo')
 assert.equal(edited.age, 99)
-step(`更新 #${editRow.id}：小數年齡被擋下；確認視窗列出變更前後；確定後畫面顯示新值`)
+step(
+  `更新 #${editRow.id}：小數年齡被擋下；確認視窗列出變更前後；確定後畫面顯示新值`,
+)
 await page.fill('.search', 'mawchu')
-await page.waitForFunction(() => document.querySelector('[data-testid=total]').textContent === '1')
+await page.waitForFunction(
+  () => document.querySelector('[data-testid=total]').textContent === '1',
+)
 r = await rowsData()
 assert.equal(r[0].id, editRow.id)
 step('改過的資料可以被搜尋到（搜尋 "mawchu" 剛好 1 筆）')
 await page.fill('.search', '')
-await page.waitForFunction(() => document.querySelector('[data-testid=total]').textContent === '10,000,000')
+await page.waitForFunction(
+  () =>
+    document.querySelector('[data-testid=total]').textContent === '10,000,000',
+)
 await waitIdle()
 
 // 刪除
@@ -196,7 +285,12 @@ step(`刪除 #${del.id}：按取消資料還在；按確定後消失，總數變
 
 // 刪除後繼續捲動，不重複不漏
 await page.$eval('.scroller', (el) => (el.scrollTop = el.scrollHeight))
-await page.waitForFunction(() => document.querySelector('[data-testid=loaded]').textContent.replace(/,/g, '') === '999')
+await page.waitForFunction(
+  () =>
+    document
+      .querySelector('[data-testid=loaded]')
+      .textContent.replace(/,/g, '') === '999',
+)
 await waitIdle()
 const allIds = await page.evaluate(async () => {
   const s = document.querySelector('.scroller')
@@ -204,8 +298,17 @@ const allIds = await page.evaluate(async () => {
   // 只檢查已載入的 999 列（捲動途中會繼續預先載入，所以要設上限）
   for (let top = 0; top < 999 * 44; top += s.clientHeight) {
     s.scrollTop = top
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-    document.querySelectorAll('.body .row').forEach((el) => seen.push([Number(el.getAttribute('aria-rowindex')), Number(el.dataset.id)]))
+    await new Promise((r) =>
+      requestAnimationFrame(() => requestAnimationFrame(r)),
+    )
+    document
+      .querySelectorAll('.body .row')
+      .forEach((el) =>
+        seen.push([
+          Number(el.getAttribute('aria-rowindex')),
+          Number(el.dataset.id),
+        ]),
+      )
   }
   return seen
 })

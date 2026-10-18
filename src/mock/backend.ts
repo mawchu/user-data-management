@@ -17,9 +17,17 @@ export function createDirectBackend(db: UserDb): MockBackend {
 }
 
 /** 瀏覽器用：資料庫跑在 Web Worker，產生與排序千萬筆時畫面不會卡住 */
-export function createWorkerBackend(size: number): { backend: MockBackend; ready: Promise<unknown> } {
-  const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
-  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason: unknown) => void }>()
+export function createWorkerBackend(size: number): {
+  backend: MockBackend
+  ready: Promise<unknown>
+} {
+  const worker = new Worker(new URL('./worker.ts', import.meta.url), {
+    type: 'module',
+  })
+  const pending = new Map<
+    number,
+    { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
+  >()
   let lastRequestId = 0
   worker.onmessage = (event: MessageEvent<MockResponse>) => {
     const response = event.data
@@ -27,7 +35,10 @@ export function createWorkerBackend(size: number): { backend: MockBackend; ready
     if (!handlers) return
     pending.delete(response.id)
     if (response.ok) handlers.resolve(response.result)
-    else handlers.reject(new ApiError(response.status, response.message, response.details))
+    else
+      handlers.reject(
+        new ApiError(response.status, response.message, response.details),
+      )
   }
   const backend: MockBackend = {
     call(request) {

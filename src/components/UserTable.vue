@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
+import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+  watchEffect,
+} from 'vue'
 import type { SortKey, SortOrder, UserRow } from '../types/user'
 
 const props = defineProps<{
@@ -38,27 +45,41 @@ const scrollTop = ref(0)
 const viewportHeight = ref(600)
 const selectedId = ref<number | null>(null)
 
-const start = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN))
+const start = computed(() =>
+  Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN),
+)
 const end = computed(() =>
-  Math.min(props.rows.length, Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + OVERSCAN),
+  Math.min(
+    props.rows.length,
+    Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + OVERSCAN,
+  ),
 )
 const visibleRows = computed(() => props.rows.slice(start.value, end.value))
 
 let frame = 0
 function onScroll() {
   cancelAnimationFrame(frame)
-  frame = requestAnimationFrame(() => (scrollTop.value = scroller.value?.scrollTop ?? 0))
+  frame = requestAnimationFrame(
+    () => (scrollTop.value = scroller.value?.scrollTop ?? 0),
+  )
 }
 
 let observer: ResizeObserver | undefined
 onMounted(() => {
-  observer = new ResizeObserver(([entry]) => (viewportHeight.value = entry.contentRect.height))
+  observer = new ResizeObserver(
+    ([entry]) => (viewportHeight.value = entry.contentRect.height),
+  )
   observer.observe(scroller.value!)
 })
 onBeforeUnmount(() => observer?.disconnect())
 
 watchEffect(() => {
-  if (props.hasMore && !props.loading && props.rows.length - end.value < PREFETCH_ROWS) emit('loadMore')
+  if (
+    props.hasMore &&
+    !props.loading &&
+    props.rows.length - end.value < PREFETCH_ROWS
+  )
+    emit('loadMore')
 })
 
 watch(
@@ -76,46 +97,159 @@ function ariaSort(key: SortKey) {
 </script>
 
 <template>
-  <div ref="scroller" class="scroller" role="table" aria-label="使用者列表" :aria-rowcount="rows.length" @scroll="onScroll">
-    <div class="row head" role="row">
-      <div class="cell num" role="columnheader">列</div>
-      <div class="cell id" role="columnheader">ID</div>
-      <div v-for="column in COLUMNS" :key="column.key" class="cell" role="columnheader" :aria-sort="ariaSort(column.key)">
-        <button class="sort" :class="{ active: sortBy === column.key }" @click="emit('sort', column.key)">
+  <div
+    ref="scroller"
+    class="scroller"
+    role="table"
+    aria-label="使用者列表"
+    :aria-rowcount="rows.length"
+    @scroll="onScroll"
+  >
+    <div
+      class="row head"
+      role="row"
+    >
+      <div
+        class="cell num"
+        role="columnheader"
+      >
+        列
+      </div>
+      <div
+        class="cell id"
+        role="columnheader"
+      >
+        ID
+      </div>
+      <div
+        v-for="column in COLUMNS"
+        :key="column.key"
+        class="cell"
+        role="columnheader"
+        :aria-sort="ariaSort(column.key)"
+      >
+        <button
+          class="sort"
+          :class="{ active: sortBy === column.key }"
+          @click="emit('sort', column.key)"
+        >
           {{ column.label }}
-          <span class="arrow" aria-hidden="true">{{ sortBy !== column.key ? '↕' : order === 'asc' ? '↑' : '↓' }}</span>
+          <span
+            class="arrow"
+            aria-hidden="true"
+            >{{
+              sortBy !== column.key ? '↕' : order === 'asc' ? '↑' : '↓'
+            }}</span
+          >
         </button>
       </div>
-      <div class="cell actions" role="columnheader">操作</div>
+      <div
+        class="cell actions"
+        role="columnheader"
+      >
+        操作
+      </div>
     </div>
 
-    <div class="body" :style="{ height: `${rows.length * ROW_HEIGHT}px` }">
-      <div class="window" :style="{ transform: `translateY(${start * ROW_HEIGHT}px)` }">
+    <div
+      class="body"
+      :style="{ height: `${rows.length * ROW_HEIGHT}px` }"
+    >
+      <div
+        class="window"
+        :style="{ transform: `translateY(${start * ROW_HEIGHT}px)` }"
+      >
         <div
           v-for="(row, offset) in visibleRows"
           :key="row.id"
           class="row"
-          :class="{ pinned: row.pinnedAt !== null, selected: selectedId === row.id }"
+          :class="{
+            pinned: row.pinnedAt !== null,
+            selected: selectedId === row.id,
+          }"
           role="row"
           :aria-rowindex="start + offset + 1"
           :data-id="row.id"
           @click="selectedId = row.id"
         >
-          <div class="cell num" role="cell">
+          <div
+            class="cell num"
+            role="cell"
+          >
             {{ (start + offset + 1).toLocaleString() }}
-            <span v-if="row.pinnedAt !== null" class="pin-badge" :title="`釘選在第 ${row.pinnedAt} 列`">📌</span>
+            <span
+              v-if="row.pinnedAt !== null"
+              class="pin-badge"
+              :title="`釘選在第 ${row.pinnedAt} 列`"
+              >📌</span
+            >
           </div>
-          <div class="cell id" role="cell">{{ row.id }}</div>
-          <div class="cell" role="cell">{{ row.userName }}</div>
-          <div class="cell" role="cell">{{ row.position }}</div>
-          <div class="cell" role="cell">{{ row.location }}</div>
-          <div class="cell" role="cell">{{ row.age }}</div>
-          <div class="cell" role="cell">{{ row.dateStart }}</div>
-          <div class="cell actions" role="cell">
-            <button class="btn small" @click.stop="emit('edit', row)">編輯</button>
-            <button v-if="row.pinnedAt === null" class="btn small" @click.stop="emit('pin', row)">釘選</button>
-            <button v-else class="btn small" @click.stop="emit('unpin', row)">取消釘選</button>
-            <button class="btn small danger" @click.stop="emit('delete', row)">刪除</button>
+          <div
+            class="cell id"
+            role="cell"
+          >
+            {{ row.id }}
+          </div>
+          <div
+            class="cell"
+            role="cell"
+          >
+            {{ row.userName }}
+          </div>
+          <div
+            class="cell"
+            role="cell"
+          >
+            {{ row.position }}
+          </div>
+          <div
+            class="cell"
+            role="cell"
+          >
+            {{ row.location }}
+          </div>
+          <div
+            class="cell"
+            role="cell"
+          >
+            {{ row.age }}
+          </div>
+          <div
+            class="cell"
+            role="cell"
+          >
+            {{ row.dateStart }}
+          </div>
+          <div
+            class="cell actions"
+            role="cell"
+          >
+            <button
+              class="btn small"
+              @click.stop="emit('edit', row)"
+            >
+              編輯
+            </button>
+            <button
+              v-if="row.pinnedAt === null"
+              class="btn small"
+              @click.stop="emit('pin', row)"
+            >
+              釘選
+            </button>
+            <button
+              v-else
+              class="btn small"
+              @click.stop="emit('unpin', row)"
+            >
+              取消釘選
+            </button>
+            <button
+              class="btn small danger"
+              @click.stop="emit('delete', row)"
+            >
+              刪除
+            </button>
           </div>
         </div>
       </div>
@@ -139,7 +273,10 @@ function ariaSort(key: SortKey) {
 }
 .row {
   display: grid;
-  grid-template-columns: 96px 96px minmax(150px, 1.3fr) minmax(170px, 1.4fr) minmax(110px, 1fr) 84px 120px 236px;
+  grid-template-columns: 96px 96px minmax(150px, 1.3fr) minmax(
+      170px,
+      1.4fr
+    ) minmax(110px, 1fr) 84px 120px 236px;
   min-width: 1090px;
   height: 44px;
   align-items: center;

@@ -9,8 +9,14 @@ export const abortedRequests = ref(0)
 
 export function setupMock() {
   // 網址加 ?size=5000 可用較少資料除錯；預設 1,000 萬筆
-  const size = Number(new URLSearchParams(location.search).get('size')) || 10_000_000
+  const size =
+    Number(new URLSearchParams(location.search).get('size')) || 10_000_000
   const { backend, ready } = createWorkerBackend(size)
-  setTransport(createMockFetch(backend, { latency: [150, 400], onAbort: () => abortedRequests.value++ }))
+  setTransport(
+    createMockFetch(backend, {
+      latency: [150, 400],
+      onAbort: () => abortedRequests.value++,
+    }),
+  )
   return ready
 }

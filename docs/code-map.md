@@ -38,7 +38,7 @@ mock/*          測試用的假後端（附錄），接真 API 時在 main.ts �
 1,000 萬筆不可能一次拿。用頁碼（page=3）的話，前面有人刪資料，第 3 頁的內容就會整個往前移，造成重複或漏資料（ADR 0002，已被取代）。
 
 ### 做法
-`src/composables/useUserList.ts:23-43`
+`src/composables/useUserList.ts:27-51`
 ```ts
 async function loadMore() {
   if (loading.value || !hasMore.value) return                 // 正在載入或已經到底就不重複請求
@@ -58,10 +58,10 @@ async function loadMore() {
 }
 ```
 - **cursor** 是後端給的「書籤」，前端不必知道它的意義，只要原封不動地傳回去。
-- **觸發時機**在 `UserTable.vue:60-62`：離已載入的底部剩不到 150 列就先抓下一批（見第 3 節）。
+- **觸發時機**在 `UserTable.vue:76-83`：離已載入的底部剩不到 150 列就先抓下一批（見第 3 節）。
 
 ### 刪除後為什麼 cursor 要減 1
-`useUserList.ts:64-73`
+`useUserList.ts:73-82`
 ```ts
 rows.value = rows.value.toSpliced(rowIndex, 1)
 if (cursor) cursor = String(Number(cursor) - 1)   // 後端結果少了一筆，書籤往前一格，下一批才不會漏掉一筆
@@ -92,10 +92,10 @@ const rows = shallowRef<UserRow[]>([])
 
 | 動作 | 位置 | 寫法 |
 |---|---|---|
-| 載入下一批 | `useUserList.ts:31` | `rows.value = rows.value.concat(response.data)` |
-| 刪除一列 | `useUserList.ts:68` | `rows.value = rows.value.toSpliced(rowIndex, 1)` |
-| 更新一列 | `useUserList.ts:79` | `rows.value = rows.value.with(rowIndex, updated)` |
-| 重新查詢 | `useUserList.ts:48` | `rows.value = []` |
+| 載入下一批 | `useUserList.ts:38` | `rows.value = rows.value.concat(response.data)` |
+| 刪除一列 | `useUserList.ts:77` | `rows.value = rows.value.toSpliced(rowIndex, 1)` |
+| 更新一列 | `useUserList.ts:88` | `rows.value = rows.value.with(rowIndex, updated)` |
+| 重新查詢 | `useUserList.ts:56` | `rows.value = []` |
 
 `toSpliced`、`with` 是 ES2023 新增的陣列方法：和 `splice`、`arr[i] = x` 效果一樣，但**不改原陣列、回傳新陣列**。
 
@@ -111,7 +111,7 @@ const rows = shallowRef<UserRow[]>([])
 
 ### 代價
 - 不能直接改 `rows.value[3].age = 40`，畫面不會更新。整個專案統一用「換新陣列」來規避。
-- 新進同事容易踩到，所以在 `useUserList.ts:30` 留了註解。
+- 新進同事容易踩到，所以在 `useUserList.ts:37` 留了註解。
 
 **Vue 2 對照（面試加分）**：Vue 2 用 `Object.defineProperty` 在初始化時就遞迴把每個屬性轉成 getter/setter，1 萬筆就要立刻轉 7 萬個屬性。Vue 2 常見的解法是 `Object.freeze(list)`，讓 Vue 跳過轉換，概念和 `shallowRef` 相同。
 
@@ -123,7 +123,7 @@ const rows = shallowRef<UserRow[]>([])
 捲到 5,000 筆，就有 5,000 列 × 8 格 = 4 萬個 DOM 節點。每個節點都佔記憶體，而且瀏覽器每次排版都要處理它們，捲動會卡。
 
 ### 做法：固定列高 → 用數學算出該畫哪幾列
-`src/components/UserTable.vue:30-45`
+`src/components/UserTable.vue:37-57`
 ```ts
 const ROW_HEIGHT = 44     // 每列固定 44px
 const OVERSCAN = 8        // 上下各多畫 8 列，快速捲動時不會閃白
@@ -140,7 +140,7 @@ const visibleRows = computed(() => props.rows.slice(start.value, end.value))
 - 只畫第 92～121 列，共 30 列，不論已經載入 500 筆還是 5 萬筆。
 
 ### 讓捲軸看起來是真的
-`UserTable.vue:92-93`
+`UserTable.vue:154-161`
 ```html
 <div class="body" :style="{ height: `${rows.length * ROW_HEIGHT}px` }">          <!-- 撐出完整高度，捲軸長度才正確 -->
   <div class="window" :style="{ transform: `translateY(${start * ROW_HEIGHT}px)` }"> <!-- 把那 30 列移到正確位置 -->
@@ -148,7 +148,7 @@ const visibleRows = computed(() => props.rows.slice(start.value, end.value))
 用 `transform` 而不是 `top`：transform 不會觸發重新排版（reflow），只需要重新合成畫面，比較順。
 
 ### 你說的 observer：這裡用的是 ResizeObserver，不是 IntersectionObserver
-`UserTable.vue:47-58`
+`UserTable.vue:59-74`
 ```ts
 function onScroll() {
   cancelAnimationFrame(frame)
@@ -163,7 +163,7 @@ observer = new ResizeObserver(([entry]) => (viewportHeight.value = entry.content
 | 為什麼這樣選 | 列高固定，用 scrollTop 算就知道範圍，不必替每一列掛監聽 | 要先把列渲染出來才能觀察，和「不渲染」的目標衝突 |
 
 ### 提早載入下一批
-`UserTable.vue:60-62`
+`UserTable.vue:76-83`
 ```ts
 watchEffect(() => {
   if (props.hasMore && !props.loading && props.rows.length - end.value < PREFETCH_ROWS) emit('loadMore')
@@ -187,7 +187,7 @@ e2e 第 2 步：已載入 500 筆，但 DOM 裡只有 25 列（`e2e/run.mjs`）�
 **支付流程類比**：連按兩次「查詢付款狀態」，慢的那次回傳「待付款」，結果蓋掉了快的那次「已付款」。
 
 ### 做法
-`useUserList.ts:45-54`
+`useUserList.ts:53-62`
 ```ts
 function reload() {
   controller?.abort()      // 取消還在路上的舊查詢
@@ -198,10 +198,10 @@ function reload() {
   return loadMore()
 }
 ```
-- 換搜尋字、點表頭、釘選後都會呼叫 `reload()`。元件卸載時也會取消（`useUserList.ts:95`）。
+- 換搜尋字、點表頭、釘選後都會呼叫 `reload()`。元件卸載時也會取消（`useUserList.ts:104`）。
 - `signal` 一路傳到 fetch：`api/users.ts` 的 `list(query, signal)` → `api/http.ts` 的 `request(..., { signal })`。
-- 被取消的請求會丟出 `AbortError`，`isAbortError()`（`http.ts:8`）把它和真正的錯誤分開，不顯示錯誤訊息。
-- `finally` 裡的 `controller === current`（`useUserList.ts:38`）：被取消的舊請求不能把「新請求的 loading」關掉。
+- 被取消的請求會丟出 `AbortError`，`isAbortError()`（`http.ts:12`）把它和真正的錯誤分開，不顯示錯誤訊息。
+- `finally` 裡的 `controller === current`（`useUserList.ts:46`）：被取消的舊請求不能把「新請求的 loading」關掉。
 
 ### 刻意不取消的：修改類請求
 更新、刪除、釘選送出後就不取消（`api/users.ts` 這幾支沒有 signal 參數）。請求一旦到了後端，資料可能已經改好；前端這時取消，只會讓畫面和實際資料不一致。
@@ -215,7 +215,7 @@ function reload() {
 ## 5. 確認視窗與修改流程（ADR 0009）
 
 ### 做法：用一個狀態描述「現在開著哪個視窗」
-`src/App.vue:49-54`
+`src/App.vue:49-58`
 ```ts
 type Dialog =
   | { type: 'edit'; row: UserRow; draft?: UserInput; serverErrors?: FieldErrors }
@@ -226,20 +226,20 @@ type Dialog =
 ```
 同一時間只會有一個視窗，不需要 5 個 `showXxxDialog` 布林值，也不會出現兩個視窗同時開著的錯誤狀態。
 
-**更新的流程**：編輯表單 →「下一步」→ 確認視窗列出「原本 / 改為」（`App.vue:73-80` 的 `changes`）→「確定更新」才打 API。
-- 後端驗證失敗（422）時，回到編輯表單並標出錯誤欄位（`App.vue:97-103`）。
+**更新的流程**：編輯表單 →「下一步」→ 確認視窗列出「原本 / 改為」（`App.vue:78-89` 的 `changes`）→「確定更新」才打 API。
+- 後端驗證失敗（422）時，回到編輯表單並標出錯誤欄位（`App.vue:106-122`）。
 - 前後端共用同一份驗證規則（`utils/validate.ts`），前端先擋一次，後端再擋一次。
 
-**共用的執行函式** `App.vue:82-95`：`run()` 統一處理「處理中」狀態、錯誤訊息、成功後關窗並顯示提示。
+**共用的執行函式** `App.vue:91-104`：`run()` 統一處理「處理中」狀態、錯誤訊息、成功後關窗並顯示提示。
 
 **原生 `<dialog>`**（`components/BaseDialog.vue`）：`showModal()` 內建焦點鎖定、按 Esc 關閉、背景遮罩，不用自己寫。
 
 ### 釘選在前端的部分（ADR 0008）
 釘選的位置合併是後端的工作。前端負責的是：
 - 讓使用者輸入位置並驗證是 1 以上的整數（`components/PinDialog.vue`）。
-- 呼叫 `PUT /api/users/:id/pin`，成功後 `reload()` 從頭查詢（`useUserList.ts:84-92`）。
+- 呼叫 `PUT /api/users/:id/pin`，成功後 `reload()` 從頭查詢（`useUserList.ts:93-101`）。
 - 位置已被別人釘選時，後端回 409，視窗直接顯示錯誤訊息，不關窗。
-- 依 `pinnedAt` 欄位顯示 📌（`UserTable.vue:106`），並切換「釘選 / 取消釘選」按鈕（116-117 行）。
+- 依 `pinnedAt` 欄位顯示 📌（`UserTable.vue:180`），並切換「釘選 / 取消釘選」按鈕（233-246 行）。
 
 ---
 
@@ -256,9 +256,9 @@ type Dialog =
 ### 前端三層省記憶體
 | 層 | 做法 | 位置 | 效果 |
 |---|---|---|---|
-| 傳輸 | 一次只拿 500 筆 | `useUserList.ts:6, 29` | 只持有看過的資料，不是 1,000 萬筆 |
+| 傳輸 | 一次只拿 500 筆 | `useUserList.ts:6, 33` | 只持有看過的資料，不是 1,000 萬筆 |
 | 狀態 | `shallowRef`，不替每筆資料建 Proxy | `useUserList.ts:11` | 見第 2 節實測 |
-| 畫面 | 虛擬捲動 | `UserTable.vue:30-45` | DOM 固定約 25–30 列 |
+| 畫面 | 虛擬捲動 | `UserTable.vue:37-57` | DOM 固定約 25–30 列 |
 | 回收 | 清空、取消、卸載時清理 | 見第 7 節 | 不要的東西能被回收 |
 
 ---
@@ -271,11 +271,11 @@ JS **沒有**「手動釋放記憶體」的 API。引擎會定期找出「再也
 ### 本專案已經做的
 | 做法 | 位置 | 回收了什麼 |
 |---|---|---|
-| 重新查詢時清空列表 | `useUserList.ts:48` `rows.value = []` | 舊的幾百到幾萬個列物件失去引用，下次 GC 會回收 |
-| 換新陣列而不是修改 | `useUserList.ts:31,68,79` | 舊陣列失去引用（列物件本身沿用，不會重複佔用） |
-| 虛擬捲動 | `UserTable.vue:45`、`v-for :key="row.id"`（95-96） | 捲出畫面的列，Vue 會卸載它的 DOM 和 vnode |
-| 取消過期請求 | `useUserList.ts:46`、`server.ts:63-69` | 舊請求的結果直接丟掉，事件監聽也移除，不會殘留 |
-| 元件卸載時清理 | `useUserList.ts:95`、`UserTable.vue:58` | 取消請求、`observer.disconnect()`，避免記憶體洩漏（leak：該回收卻一直被引用） |
+| 重新查詢時清空列表 | `useUserList.ts:56` `rows.value = []` | 舊的幾百到幾萬個列物件失去引用，下次 GC 會回收 |
+| 換新陣列而不是修改 | `useUserList.ts:38,77,88` | 舊陣列失去引用（列物件本身沿用，不會重複佔用） |
+| 虛擬捲動 | `UserTable.vue:57`、`v-for :key="row.id"`（163-164） | 捲出畫面的列，Vue 會卸載它的 DOM 和 vnode |
+| 取消過期請求 | `useUserList.ts:54`、`server.ts:98-109` | 舊請求的結果直接丟掉，事件監聽也移除，不會殘留 |
+| 元件卸載時清理 | `useUserList.ts:104`、`UserTable.vue:74` | 取消請求、`observer.disconnect()`，避免記憶體洩漏（leak：該回收卻一直被引用） |
 
 ### 還沒做的：已載入資料的「滑動視窗回收」（ADR 0011 列為待做）
 **目前的限制（事實）**：使用者一路往下捲，`rows` 會一直變長。捲到 5 萬筆，主執行緒就持有 5 萬個物件（推測約 10MB 上下，沒有實測）。DOM 不會變多，但 JS 物件會。

@@ -10,7 +10,12 @@ onMounted(() => dialogElement.value?.showModal())
 </script>
 
 <template>
-  <dialog ref="dialogElement" class="dialog" @cancel.prevent="emit('close')" @click.self="emit('close')">
+  <dialog
+    ref="dialogElement"
+    class="dialog"
+    @cancel.prevent="emit('close')"
+    @click.self="emit('close')"
+  >
     <div class="panel">
       <h2>{{ title }}</h2>
       <slot />

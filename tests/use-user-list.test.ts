@@ -10,7 +10,10 @@ describe('useUserList 取消過期請求', () => {
   it('快速切換搜尋：舊請求被取消，畫面只留最後一次的結果', async () => {
     let aborted = 0
     const urls: string[] = []
-    const mockFetch = createMockFetch(createDirectBackend(new UserDb(3000)), { latency: [30, 30], onAbort: () => aborted++ })
+    const mockFetch = createMockFetch(createDirectBackend(new UserDb(3000)), {
+      latency: [30, 30],
+      onAbort: () => aborted++,
+    })
     setTransport((input, init) => (urls.push(input), mockFetch(input, init)))
 
     const scope = effectScope()
@@ -25,7 +28,13 @@ describe('useUserList 取消過期請求', () => {
     expect(aborted).toBe(2)
     expect(urls).toHaveLength(3)
     expect(list.rows.value.length).toBeGreaterThan(0)
-    expect(list.rows.value.every((r) => [r.userName, r.position, r.location, String(r.age), r.dateStart].some((v) => v.toLowerCase().includes('chen')))).toBe(true)
+    expect(
+      list.rows.value.every((r) =>
+        [r.userName, r.position, r.location, String(r.age), r.dateStart].some(
+          (v) => v.toLowerCase().includes('chen'),
+        ),
+      ),
+    ).toBe(true)
     expect(list.loading.value).toBe(false)
     expect(list.error.value).toBeNull()
 

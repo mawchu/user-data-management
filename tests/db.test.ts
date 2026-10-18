@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { ApiError, UserDb } from '../src/mock/db'
 import type { SortKey, User, UserListQuery, UserRow } from '../src/types/user'
 
-const SORT_KEYS: SortKey[] = ['userName', 'position', 'location', 'age', 'dateStart']
+const SORT_KEYS: SortKey[] = [
+  'userName',
+  'position',
+  'location',
+  'age',
+  'dateStart',
+]
 const collator = new Intl.Collator('en', { sensitivity: 'base', numeric: true })
 
 /** 把所有批次接起來，模擬使用者一路捲到底 */
@@ -18,14 +24,29 @@ function loadAll(db: UserDb, query: Omit<UserListQuery, 'cursor'>): UserRow[] {
 }
 
 /** 用最直白的方式算出「應該」的結果，拿來對照 */
-function reference(all: User[], q: string, sortBy: SortKey | null, order: 'asc' | 'desc'): number[] {
+function reference(
+  all: User[],
+  q: string,
+  sortBy: SortKey | null,
+  order: 'asc' | 'desc',
+): number[] {
   const kw = q.trim().toLowerCase()
-  const rows = all.filter((u) => !kw || [u.userName, u.position, u.location, String(u.age), u.dateStart].some((v) => v.toLowerCase().includes(kw)))
+  const rows = all.filter(
+    (u) =>
+      !kw ||
+      [u.userName, u.position, u.location, String(u.age), u.dateStart].some(
+        (v) => v.toLowerCase().includes(kw),
+      ),
+  )
   if (sortBy) {
     const dir = order === 'asc' ? 1 : -1
     rows.sort((a, b) => {
-      const va = a[sortBy], vb = b[sortBy]
-      const c = typeof va === 'number' ? va - (vb as number) : collator.compare(va, vb as string)
+      const va = a[sortBy],
+        vb = b[sortBy]
+      const c =
+        typeof va === 'number'
+          ? va - (vb as number)
+          : collator.compare(va, vb as string)
       return c * dir || a.id - b.id
     })
   }
@@ -57,18 +78,33 @@ describe('UserDb', () => {
     }
   })
 
-  it.each(SORT_KEYS.flatMap((k) => [[k, 'asc'], [k, 'desc']] as const))('排序 %s %s 與參考實作一致', (sortBy, order) => {
+  it.each(
+    SORT_KEYS.flatMap(
+      (k) =>
+        [
+          [k, 'asc'],
+          [k, 'desc'],
+        ] as const,
+    ),
+  )('排序 %s %s 與參考實作一致', (sortBy, order) => {
     const db = new UserDb(3000)
     const expected = reference(allUsers(db), '', sortBy, order)
     expect(loadAll(db, { sortBy, order }).map((r) => r.id)).toEqual(expected)
   })
 
-  it.each(['chen', 'ENGINEER', 'tai', '42', '2015-03', '-12-', 'zzz-no-match'])('搜尋 "%s" 與參考實作一致', (q) => {
-    const db = new UserDb(3000)
-    const all = allUsers(db)
-    expect(loadAll(db, { q }).map((r) => r.id)).toEqual(reference(all, q, null, 'asc'))
-    expect(loadAll(db, { q, sortBy: 'age', order: 'desc' }).map((r) => r.id)).toEqual(reference(all, q, 'age', 'desc'))
-  })
+  it.each(['chen', 'ENGINEER', 'tai', '42', '2015-03', '-12-', 'zzz-no-match'])(
+    '搜尋 "%s" 與參考實作一致',
+    (q) => {
+      const db = new UserDb(3000)
+      const all = allUsers(db)
+      expect(loadAll(db, { q }).map((r) => r.id)).toEqual(
+        reference(all, q, null, 'asc'),
+      )
+      expect(
+        loadAll(db, { q, sortBy: 'age', order: 'desc' }).map((r) => r.id),
+      ).toEqual(reference(all, q, 'age', 'desc'))
+    },
+  )
 
   it('釘選：不論怎麼排序，釘選列都在指定位置', () => {
     const db = new UserDb(3000)
@@ -85,7 +121,12 @@ describe('UserDb', () => {
         expect(rows[599].pinnedAt).toBe(600)
         // 其餘資料仍依排序規則
         const rest = rows.filter((r) => r.pinnedAt === null).map((r) => r.id)
-        const expected = reference(allUsers(new UserDb(3000)), '', sortBy, order).filter((id) => ![2500, 10, 777].includes(id))
+        const expected = reference(
+          allUsers(new UserDb(3000)),
+          '',
+          sortBy,
+          order,
+        ).filter((id) => ![2500, 10, 777].includes(id))
         expect(rest).toEqual(expected)
       }
     }
@@ -101,7 +142,13 @@ describe('UserDb', () => {
     const q = target.userName.toLowerCase()
     const filtered = loadAll(db, { q })
     expect(filtered[1].id).toBe(5)
-    const sixMatches = [db.get(6).userName, db.get(6).position, db.get(6).location, String(db.get(6).age), db.get(6).dateStart].some((v) => v.toLowerCase().includes(q))
+    const sixMatches = [
+      db.get(6).userName,
+      db.get(6).position,
+      db.get(6).location,
+      String(db.get(6).age),
+      db.get(6).dateStart,
+    ].some((v) => v.toLowerCase().includes(q))
     expect(filtered.some((r) => r.id === 6)).toBe(sixMatches)
   })
 
@@ -127,7 +174,9 @@ describe('UserDb', () => {
       rest.push(...res.data)
       cursor = res.nextCursor
     }
-    const ids = [...first.data.filter((r) => r.id !== victim), ...rest].map((r) => r.id)
+    const ids = [...first.data.filter((r) => r.id !== victim), ...rest].map(
+      (r) => r.id,
+    )
     expect(ids).toEqual(reference(allUsers(db), '', 'age', 'asc'))
     expect(new Set(ids).size).toBe(ids.length)
     expect(ids).toHaveLength(1199)
@@ -146,15 +195,43 @@ describe('UserDb', () => {
 
   it('更新：驗證欄位，成功後可被搜尋、重新排序時位置正確', () => {
     const db = new UserDb(1000)
-    expect(() => db.update(1, { userName: '', position: 'x', location: 'y', age: 30.5, dateStart: '2024-02-30' })).toThrow(ApiError)
+    expect(() =>
+      db.update(1, {
+        userName: '',
+        position: 'x',
+        location: 'y',
+        age: 30.5,
+        dateStart: '2024-02-30',
+      }),
+    ).toThrow(ApiError)
     try {
-      db.update(1, { userName: '', position: 'x', location: 'y', age: 30.5, dateStart: '2024-02-30' })
+      db.update(1, {
+        userName: '',
+        position: 'x',
+        location: 'y',
+        age: 30.5,
+        dateStart: '2024-02-30',
+      })
     } catch (e) {
-      expect((e as ApiError).details).toMatchObject({ userName: '必填', age: '請輸入整數' })
+      expect((e as ApiError).details).toMatchObject({
+        userName: '必填',
+        age: '請輸入整數',
+      })
       expect((e as ApiError).details).toHaveProperty('dateStart')
     }
-    const updated = db.update(42, { userName: '  Mawchu Test ', position: 'Tech Lead', location: 'Remote', age: 99, dateStart: '2026-10-17' })
-    expect(updated).toMatchObject({ id: 42, userName: 'Mawchu Test', position: 'Tech Lead', age: 99 })
+    const updated = db.update(42, {
+      userName: '  Mawchu Test ',
+      position: 'Tech Lead',
+      location: 'Remote',
+      age: 99,
+      dateStart: '2026-10-17',
+    })
+    expect(updated).toMatchObject({
+      id: 42,
+      userName: 'Mawchu Test',
+      position: 'Tech Lead',
+      age: 99,
+    })
     expect(loadAll(db, { q: 'mawchu' }).map((r) => r.id)).toEqual([42])
     expect(loadAll(db, { sortBy: 'age', order: 'desc' })[0].id).toBe(42)
     expect(loadAll(db, { sortBy: 'dateStart', order: 'desc' })[0].id).toBe(42)
@@ -163,6 +240,8 @@ describe('UserDb', () => {
   it('錯誤：不存在的 id 回 404，cursor 格式錯誤回 400', () => {
     const db = new UserDb(100)
     expect(() => db.get(101)).toThrow(expect.objectContaining({ status: 404 }))
-    expect(() => db.list({ cursor: 'abc' })).toThrow(expect.objectContaining({ status: 400 }))
+    expect(() => db.list({ cursor: 'abc' })).toThrow(
+      expect.objectContaining({ status: 400 }),
+    )
   })
 })

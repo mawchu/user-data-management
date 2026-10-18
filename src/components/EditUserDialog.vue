@@ -2,12 +2,25 @@
 import { reactive, ref } from 'vue'
 import BaseDialog from './BaseDialog.vue'
 import type { UserInput, UserRow } from '../types/user'
-import { AGE_MAX, AGE_MIN, DATE_MAX, DATE_MIN, validateUserInput, type FieldErrors } from '../utils/validate'
+import {
+  AGE_MAX,
+  AGE_MIN,
+  DATE_MAX,
+  DATE_MIN,
+  validateUserInput,
+  type FieldErrors,
+} from '../utils/validate'
 
-const props = defineProps<{ row: UserRow; draft?: UserInput; serverErrors?: FieldErrors }>()
+const props = defineProps<{
+  row: UserRow
+  draft?: UserInput
+  serverErrors?: FieldErrors
+}>()
 const emit = defineEmits<{ submit: [input: UserInput]; cancel: [] }>()
 
-const form = reactive<Record<keyof UserInput, string | number>>({ ...(props.draft ?? props.row) })
+const form = reactive<Record<keyof UserInput, string | number>>({
+  ...(props.draft ?? props.row),
+})
 const errors = ref<FieldErrors>(props.serverErrors ?? {})
 
 const FIELDS = [
@@ -33,25 +46,65 @@ function submit() {
 </script>
 
 <template>
-  <BaseDialog :title="`編輯使用者 #${row.id}`" @close="emit('cancel')">
-    <form id="edit-user-form" class="form" novalidate @submit.prevent="submit">
-      <label v-for="field in FIELDS" :key="field.key" class="field">
+  <BaseDialog
+    :title="`編輯使用者 #${row.id}`"
+    @close="emit('cancel')"
+  >
+    <form
+      id="edit-user-form"
+      class="form"
+      novalidate
+      @submit.prevent="submit"
+    >
+      <label
+        v-for="field in FIELDS"
+        :key="field.key"
+        class="field"
+      >
         <span>{{ field.label }}</span>
         <input
           v-model="form[field.key]"
           :name="field.key"
           :type="field.type"
-          :min="field.key === 'age' ? AGE_MIN : field.key === 'dateStart' ? DATE_MIN : undefined"
-          :max="field.key === 'age' ? AGE_MAX : field.key === 'dateStart' ? DATE_MAX : undefined"
+          :min="
+            field.key === 'age'
+              ? AGE_MIN
+              : field.key === 'dateStart'
+                ? DATE_MIN
+                : undefined
+          "
+          :max="
+            field.key === 'age'
+              ? AGE_MAX
+              : field.key === 'dateStart'
+                ? DATE_MAX
+                : undefined
+          "
           :step="field.key === 'age' ? 1 : undefined"
           :aria-invalid="!!errors[field.key]"
         />
-        <small v-if="errors[field.key]" class="error">{{ errors[field.key] }}</small>
+        <small
+          v-if="errors[field.key]"
+          class="error"
+          >{{ errors[field.key] }}</small
+        >
       </label>
     </form>
     <template #buttons>
-      <button class="btn" type="button" @click="emit('cancel')">取消</button>
-      <button class="btn primary" type="submit" form="edit-user-form">下一步</button>
+      <button
+        class="btn"
+        type="button"
+        @click="emit('cancel')"
+      >
+        取消
+      </button>
+      <button
+        class="btn primary"
+        type="submit"
+        form="edit-user-form"
+      >
+        下一步
+      </button>
     </template>
   </BaseDialog>
 </template>

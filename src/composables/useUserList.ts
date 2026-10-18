@@ -14,7 +14,11 @@ export function useUserList() {
   const hasMore = ref(true)
   const error = ref<string | null>(null)
   const resetKey = ref(0)
-  const query = reactive<{ q: string; sortBy: SortKey | null; order: SortOrder }>({ q: '', sortBy: null, order: 'asc' })
+  const query = reactive<{
+    q: string
+    sortBy: SortKey | null
+    order: SortOrder
+  }>({ q: '', sortBy: null, order: 'asc' })
 
   let cursor: string | null = null
   // 目前進行中的查詢。換搜尋字或排序時呼叫 abort()，舊請求就不會再佔用網路，也不會晚回來蓋掉新結果
@@ -26,14 +30,18 @@ export function useUserList() {
     loading.value = true
     error.value = null
     try {
-      const response = await usersApi.list({ ...query, cursor, limit: BATCH }, current.signal)
+      const response = await usersApi.list(
+        { ...query, cursor, limit: BATCH },
+        current.signal,
+      )
       // 換成新陣列（而不是 push）：子元件的 props 才會偵測到變化
       rows.value = rows.value.concat(response.data)
       total.value = response.total
       cursor = response.nextCursor
       hasMore.value = response.hasMore
     } catch (requestError) {
-      if (!isAbortError(requestError)) error.value = (requestError as Error).message
+      if (!isAbortError(requestError))
+        error.value = (requestError as Error).message
     } finally {
       if (controller === current) {
         loading.value = false
@@ -55,7 +63,8 @@ export function useUserList() {
 
   /** 表頭點擊：未排序 → 升冪 → 降冪 → 未排序 */
   function toggleSort(key: SortKey) {
-    if (query.sortBy !== key) Object.assign(query, { sortBy: key, order: 'asc' })
+    if (query.sortBy !== key)
+      Object.assign(query, { sortBy: key, order: 'asc' })
     else if (query.order === 'asc') query.order = 'desc'
     else Object.assign(query, { sortBy: null, order: 'asc' })
     return reload()
@@ -94,5 +103,20 @@ export function useUserList() {
   // 元件卸載時，取消還在路上的請求
   onScopeDispose(() => controller?.abort())
 
-  return { rows, total, loading, hasMore, error, query, resetKey, loadMore, reload, toggleSort, removeRow, updateRow, pinRow, unpinRow }
+  return {
+    rows,
+    total,
+    loading,
+    hasMore,
+    error,
+    query,
+    resetKey,
+    loadMore,
+    reload,
+    toggleSort,
+    removeRow,
+    updateRow,
+    pinRow,
+    unpinRow,
+  }
 }

@@ -3,7 +3,13 @@ import { ref } from 'vue'
 import BaseDialog from './BaseDialog.vue'
 import type { UserRow } from '../types/user'
 
-const props = defineProps<{ row: UserRow; currentIndex: number; total: number; busy?: boolean; error?: string | null }>()
+const props = defineProps<{
+  row: UserRow
+  currentIndex: number
+  total: number
+  busy?: boolean
+  error?: string | null
+}>()
 const emit = defineEmits<{ submit: [position: number]; cancel: [] }>()
 
 const position = ref(String(props.currentIndex))
@@ -21,20 +27,57 @@ function submit() {
 </script>
 
 <template>
-  <BaseDialog title="釘選到指定位置" @close="!busy && emit('cancel')">
+  <BaseDialog
+    title="釘選到指定位置"
+    @close="!busy && emit('cancel')"
+  >
     <p>
-      把 <b>#{{ row.id }} {{ row.userName }}</b> 固定在第幾列？之後不論依哪個欄位排序，它都會顯示在這一列。
+      把
+      <b>#{{ row.id }} {{ row.userName }}</b>
+      固定在第幾列？之後不論依哪個欄位排序，它都會顯示在這一列。
     </p>
-    <form id="pin-form" class="form" novalidate @submit.prevent="submit">
+    <form
+      id="pin-form"
+      class="form"
+      novalidate
+      @submit.prevent="submit"
+    >
       <label class="field">
         <span>位置（1–{{ total.toLocaleString() }}）</span>
-        <input v-model="position" name="position" type="number" min="1" step="1" autofocus />
+        <input
+          v-model="position"
+          name="position"
+          type="number"
+          min="1"
+          step="1"
+          autofocus
+        />
       </label>
     </form>
-    <p v-if="localError || error" class="error" role="alert">{{ localError || error }}</p>
+    <p
+      v-if="localError || error"
+      class="error"
+      role="alert"
+    >
+      {{ localError || error }}
+    </p>
     <template #buttons>
-      <button class="btn" type="button" :disabled="busy" @click="emit('cancel')">取消</button>
-      <button class="btn primary" type="submit" form="pin-form" :disabled="busy">{{ busy ? '處理中…' : '釘選' }}</button>
+      <button
+        class="btn"
+        type="button"
+        :disabled="busy"
+        @click="emit('cancel')"
+      >
+        取消
+      </button>
+      <button
+        class="btn primary"
+        type="submit"
+        form="pin-form"
+        :disabled="busy"
+      >
+        {{ busy ? '處理中…' : '釘選' }}
+      </button>
     </template>
   </BaseDialog>
 </template>

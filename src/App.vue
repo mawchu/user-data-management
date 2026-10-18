@@ -46,7 +46,12 @@ function notify(message: string) {
 }
 
 type Dialog =
-  | { type: 'edit'; row: UserRow; draft?: UserInput; serverErrors?: FieldErrors }
+  | {
+      type: 'edit'
+      row: UserRow
+      draft?: UserInput
+      serverErrors?: FieldErrors
+    }
   | { type: 'confirmUpdate'; row: UserRow; input: UserInput }
   | { type: 'confirmDelete'; row: UserRow }
   | { type: 'pin'; row: UserRow; index: number }
@@ -76,7 +81,11 @@ const changes = computed(() => {
   if (current?.type !== 'confirmUpdate') return []
   return (Object.keys(FIELD_LABELS) as (keyof UserInput)[])
     .filter((field) => current.row[field] !== current.input[field])
-    .map((field) => ({ label: FIELD_LABELS[field], from: current.row[field], to: current.input[field] }))
+    .map((field) => ({
+      label: FIELD_LABELS[field],
+      from: current.row[field],
+      to: current.input[field],
+    }))
 })
 
 async function run(action: () => Promise<unknown>, done: string) {
@@ -94,11 +103,21 @@ async function run(action: () => Promise<unknown>, done: string) {
   }
 }
 
-async function confirmUpdate(pending: Extract<Dialog, { type: 'confirmUpdate' }>) {
-  const updateError = await run(() => list.updateRow(pending.row.id, pending.input), `已更新 #${pending.row.id}`)
+async function confirmUpdate(
+  pending: Extract<Dialog, { type: 'confirmUpdate' }>,
+) {
+  const updateError = await run(
+    () => list.updateRow(pending.row.id, pending.input),
+    `已更新 #${pending.row.id}`,
+  )
   // 後端驗證失敗：回到編輯表單並標出錯誤欄位
   if (updateError instanceof HttpError && updateError.status === 422) {
-    open({ type: 'edit', row: pending.row, draft: pending.input, serverErrors: updateError.details as FieldErrors })
+    open({
+      type: 'edit',
+      row: pending.row,
+      draft: pending.input,
+      serverErrors: updateError.details as FieldErrors,
+    })
   }
 }
 
@@ -115,11 +134,14 @@ function onPin(row: UserRow) {
         <p class="meta">
           <template v-if="booting">正在產生 10,000,000 筆 mock 資料…</template>
           <template v-else>
-            共 <b data-testid="total">{{ total.toLocaleString() }}</b> 筆，已載入
-            <span data-testid="loaded">{{ rows.length.toLocaleString() }}</span> 筆
+            共
+            <b data-testid="total">{{ total.toLocaleString() }}</b> 筆，已載入
+            <span data-testid="loaded">{{ rows.length.toLocaleString() }}</span>
+            筆
             <span class="hint">
               （資料產生 {{ bootMs }}ms，每次捲動載入 500 筆，已取消
-              <span data-testid="aborted">{{ abortedRequests }}</span> 個過期請求）
+              <span data-testid="aborted">{{ abortedRequests }}</span>
+              個過期請求）
             </span>
           </template>
         </p>
@@ -134,7 +156,13 @@ function onPin(row: UserRow) {
       />
     </header>
 
-    <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <p
+      v-if="error"
+      class="error"
+      role="alert"
+    >
+      {{ error }}
+    </p>
 
     <main class="main">
       <UserTable
@@ -152,7 +180,12 @@ function onPin(row: UserRow) {
         @pin="onPin"
         @unpin="(row) => open({ type: 'confirmUnpin', row })"
       />
-      <div v-else class="booting">載入中…</div>
+      <div
+        v-else
+        class="booting"
+      >
+        載入中…
+      </div>
     </main>
 
     <EditUserDialog
@@ -162,7 +195,10 @@ function onPin(row: UserRow) {
       :draft="dialog.draft"
       :server-errors="dialog.serverErrors"
       @cancel="close"
-      @submit="(input) => dialog && open({ type: 'confirmUpdate', row: dialog.row, input })"
+      @submit="
+        (input) =>
+          dialog && open({ type: 'confirmUpdate', row: dialog.row, input })
+      "
     />
 
     <ConfirmDialog
@@ -175,15 +211,34 @@ function onPin(row: UserRow) {
       @confirm="confirmUpdate(dialog)"
     >
       <p>#{{ dialog.row.id }} {{ dialog.row.userName }}</p>
-      <table v-if="changes.length" class="diff">
-        <thead><tr><th>欄位</th><th>原本</th><th>改為</th></tr></thead>
+      <table
+        v-if="changes.length"
+        class="diff"
+      >
+        <thead>
+          <tr>
+            <th>欄位</th>
+            <th>原本</th>
+            <th>改為</th>
+          </tr>
+        </thead>
         <tbody>
-          <tr v-for="c in changes" :key="c.label">
-            <td>{{ c.label }}</td><td class="from">{{ c.from }}</td><td class="to">{{ c.to }}</td>
+          <tr
+            v-for="c in changes"
+            :key="c.label"
+          >
+            <td>{{ c.label }}</td>
+            <td class="from">{{ c.from }}</td>
+            <td class="to">{{ c.to }}</td>
           </tr>
         </tbody>
       </table>
-      <p v-else class="hint">沒有任何欄位變更。</p>
+      <p
+        v-else
+        class="hint"
+      >
+        沒有任何欄位變更。
+      </p>
     </ConfirmDialog>
 
     <ConfirmDialog
@@ -194,10 +249,13 @@ function onPin(row: UserRow) {
       :busy="busy"
       :error="dialogError"
       @cancel="close"
-      @confirm="run(() => list.removeRow(dialog!.row.id), `已刪除 #${dialog!.row.id}`)"
+      @confirm="
+        run(() => list.removeRow(dialog!.row.id), `已刪除 #${dialog!.row.id}`)
+      "
     >
       <p>
-        <b>#{{ dialog.row.id }} {{ dialog.row.userName }}</b>（{{ dialog.row.position }}，{{ dialog.row.location }}）
+        <b>#{{ dialog.row.id }} {{ dialog.row.userName }}</b
+        >（{{ dialog.row.position }}，{{ dialog.row.location }}）
       </p>
       <p class="hint">刪除後無法復原。</p>
     </ConfirmDialog>
@@ -210,7 +268,13 @@ function onPin(row: UserRow) {
       :busy="busy"
       :error="dialogError"
       @cancel="close"
-      @submit="(position) => run(() => list.pinRow(dialog!.row.id, position), `已把 #${dialog!.row.id} 釘選在第 ${position} 列`)"
+      @submit="
+        (position) =>
+          run(
+            () => list.pinRow(dialog!.row.id, position),
+            `已把 #${dialog!.row.id} 釘選在第 ${position} 列`,
+          )
+      "
     />
 
     <ConfirmDialog
@@ -220,12 +284,26 @@ function onPin(row: UserRow) {
       :busy="busy"
       :error="dialogError"
       @cancel="close"
-      @confirm="run(() => list.unpinRow(dialog!.row.id), `已取消釘選 #${dialog!.row.id}`)"
+      @confirm="
+        run(
+          () => list.unpinRow(dialog!.row.id),
+          `已取消釘選 #${dialog!.row.id}`,
+        )
+      "
     >
-      <p>#{{ dialog.row.id }} {{ dialog.row.userName }} 目前釘選在第 {{ dialog.row.pinnedAt }} 列，取消後會回到依排序規則的位置。</p>
+      <p>
+        #{{ dialog.row.id }} {{ dialog.row.userName }} 目前釘選在第
+        {{ dialog.row.pinnedAt }} 列，取消後會回到依排序規則的位置。
+      </p>
     </ConfirmDialog>
 
-    <div v-if="toast" class="toast" role="status">{{ toast }}</div>
+    <div
+      v-if="toast"
+      class="toast"
+      role="status"
+    >
+      {{ toast }}
+    </div>
   </div>
 </template>
 

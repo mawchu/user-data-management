@@ -17,14 +17,20 @@ export function validateUserInput(input: UserInput): FieldErrors {
     else if (value.length > TEXT_MAX) errors[key] = `最多 ${TEXT_MAX} 個字`
   }
   if (!Number.isInteger(input.age)) errors.age = '請輸入整數'
-  else if (input.age < AGE_MIN || input.age > AGE_MAX) errors.age = `需介於 ${AGE_MIN}–${AGE_MAX}`
-  if (!isValidDate(input.dateStart)) errors.dateStart = '格式需為 YYYY-MM-DD 的有效日期'
-  else if (input.dateStart < DATE_MIN || input.dateStart > DATE_MAX) errors.dateStart = `需介於 ${DATE_MIN} 至 ${DATE_MAX}`
+  else if (input.age < AGE_MIN || input.age > AGE_MAX)
+    errors.age = `需介於 ${AGE_MIN}–${AGE_MAX}`
+  if (!isValidDate(input.dateStart))
+    errors.dateStart = '格式需為 YYYY-MM-DD 的有效日期'
+  else if (input.dateStart < DATE_MIN || input.dateStart > DATE_MAX)
+    errors.dateStart = `需介於 ${DATE_MIN} 至 ${DATE_MAX}`
   return errors
 }
 
 function isValidDate(value: unknown): value is string {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+    return false
   const date = new Date(`${value}T00:00:00Z`)
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+  return (
+    !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+  )
 }

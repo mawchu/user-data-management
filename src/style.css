@@ -47,7 +47,12 @@ body,
 }
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans TC', sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    'Noto Sans TC',
+    sans-serif;
   font-size: 14px;
   color: var(--text);
   background: var(--surface-2);

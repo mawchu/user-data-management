@@ -1,11 +1,16 @@
 // 共用的 HTTP 請求函式：寫法和打真實後端一模一樣（fetch + AbortSignal + 依狀態碼處理錯誤）
 export class HttpError extends Error {
-  constructor(public status: number, message: string, public details?: unknown) {
+  constructor(
+    public status: number,
+    message: string,
+    public details?: unknown,
+  ) {
     super(message)
   }
 }
 
-export const isAbortError = (error: unknown) => error instanceof DOMException && error.name === 'AbortError'
+export const isAbortError = (error: unknown) =>
+  error instanceof DOMException && error.name === 'AbortError'
 
 export type Transport = (input: string, init?: RequestInit) => Promise<Response>
 
@@ -24,11 +29,19 @@ export async function request<T>(
   const response = await transport(url, {
     method,
     signal: options.signal,
-    headers: options.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers:
+      options.body !== undefined
+        ? { 'Content-Type': 'application/json' }
+        : undefined,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   })
   if (response.status === 204) return undefined as T
   const data = await response.json().catch(() => null)
-  if (!response.ok) throw new HttpError(response.status, data?.message ?? `HTTP ${response.status}`, data?.details)
+  if (!response.ok)
+    throw new HttpError(
+      response.status,
+      data?.message ?? `HTTP ${response.status}`,
+      data?.details,
+    )
   return data as T
 }
