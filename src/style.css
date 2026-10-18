@@ -1,0 +1,90 @@
+:root {
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --hover: #f1f5f9;
+  --selected: #dbeafe;
+  --pinned: #fef9c3;
+  --accent: #2563eb;
+  --danger: #dc2626;
+  color-scheme: light;
+}
+/* 深色：跟隨系統設定；頁面若明確指定 data-theme 則以它為準 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #334155;
+    --surface: #0f172a;
+    --surface-2: #1e293b;
+    --hover: #1e293b;
+    --selected: #1e3a8a;
+    --pinned: #422006;
+    --accent: #60a5fa;
+    --danger: #f87171;
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --border: #334155;
+  --surface: #0f172a;
+  --surface-2: #1e293b;
+  --hover: #1e293b;
+  --selected: #1e3a8a;
+  --pinned: #422006;
+  --accent: #60a5fa;
+  --danger: #f87171;
+  color-scheme: dark;
+}
+html,
+body,
+#app {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans TC', sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface-2);
+}
+.btn {
+  font: inherit;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn.small {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn.danger {
+  color: var(--danger);
+}
+.btn.primary.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.error {
+  color: var(--danger);
+}
+.hint {
+  color: var(--muted);
+}
