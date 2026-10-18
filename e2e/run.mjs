@@ -25,20 +25,23 @@ import { writeSync } from 'node:fs'
 const step = (name) => writeSync(1, `✓ ${name}\n`)
 const rowsData = () =>
   page.$$eval('.body .row', (els) =>
-    els.map((el) => {
-      const c = [...el.querySelectorAll('.cell')].map((x) =>
-        x.textContent.trim(),
-      )
-      return {
-        num: c[0],
-        id: Number(c[1]),
-        userName: c[2],
-        position: c[3],
-        location: c[4],
-        age: Number(c[5]),
-        dateStart: c[6],
-      }
-    }),
+    // DOM 回收後，DOM 順序不等於畫面順序，依 aria-rowindex 排回畫面上的順序
+    [...els]
+      .sort((a, b) => a.ariaRowIndex - b.ariaRowIndex)
+      .map((el) => {
+        const c = [...el.querySelectorAll('.cell')].map((x) =>
+          x.textContent.trim(),
+        )
+        return {
+          num: c[0],
+          id: Number(c[1]),
+          userName: c[2],
+          position: c[3],
+          location: c[4],
+          age: Number(c[5]),
+          dateStart: c[6],
+        }
+      }),
   )
 const total = async () =>
   Number((await page.textContent('[data-testid=total]')).replace(/,/g, ''))
@@ -75,6 +78,60 @@ assert.ok(afterScroll.length < 60)
 const ids = new Set()
 step('捲到底自動載入下一批：已載入 1,000 筆')
 await page.$eval('.scroller', (el) => (el.scrollTop = 0))
+
+// DOM 回收：捲動時沿用同一組 DOM 元素，只換內容
+const settle = () =>
+  page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+const scrollToRow = async (rowIndex) => {
+  await page.$eval(
+    '.scroller',
+    (el, top) => (el.scrollTop = top),
+    rowIndex * 44,
+  )
+  await settle()
+}
+await scrollToRow(0)
+const poolCount = await page.$$eval('.body .row', (els) => {
+  window.__pool = els
+  return els.length
+})
+const firstIdsBefore = await page.$$eval('.body .row', (els) =>
+  els.map((el) => el.dataset.id).join(),
+)
+await scrollToRow(40)
+const recycle = await page.$$eval('.body .row', (els) => ({
+  reused: els.filter((el) => window.__pool.includes(el)).length,
+  ids: els.map((el) => el.dataset.id).join(),
+}))
+assert.equal(recycle.reused, poolCount, '捲動後應沿用同一組 DOM 元素')
+assert.notEqual(recycle.ids, firstIdsBefore, '內容應換成新的列')
+step(`DOM 回收：捲動 40 列後 ${poolCount} 個元素全部沿用，只換內容`)
+
+// 回收的副作用：焦點所在的格子換成別人時，要把焦點移開
+await scrollToRow(0)
+await page.focus('.body .row[aria-rowindex="20"] .danger')
+await scrollToRow(1)
+assert.equal(
+  await page.evaluate(
+    () => document.activeElement?.closest('.row')?.ariaRowIndex,
+  ),
+  '20',
+  '列還在畫面上時，焦點應保留',
+)
+await page.focus('.body .row[aria-rowindex="1"] .danger')
+await scrollToRow(300)
+assert.equal(
+  await page.evaluate(() => !!document.activeElement?.closest('.body .row')),
+  false,
+  '格子換成別筆資料後，焦點不應留在別人的按鈕上',
+)
+step('焦點保護：列還在畫面時保留焦點；格子換人後焦點自動移開')
+await scrollToRow(0)
 
 // 排序
 const sortBy = async (label) => {

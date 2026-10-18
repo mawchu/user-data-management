@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "perf": "PERF=1 vitest run tests/perf.test.ts",
-    "format": "prettier --write src tests e2e"
+    "format": "prettier --write src tests e2e",
+    "bench:scroll": "node bench/virtual-scroll/run.mjs"
   },
   "dependencies": {
     "vue": "^3.5.44"

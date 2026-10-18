@@ -1,0 +1,119 @@
+<!doctype html><meta charset="utf-8" />
+<body>
+  <div id="app"></div>
+  <script src="../../node_modules/vue/dist/vue.global.prod.js"></script>
+  <script>
+    const { createApp, ref, computed, nextTick, h, defineComponent } = Vue
+    const N = 20000,
+      H = 44,
+      POOL = 30
+    const rows = Array.from({ length: N }, (_, i) => ({
+      id: i + 1,
+      userName: 'User ' + i,
+      position: 'QA Engineer',
+      location: 'Taipei',
+      age: 20 + (i % 46),
+      dateStart: '2015-03-01',
+      pinnedAt: null,
+    }))
+    const FIELDS = [
+      'id',
+      'userName',
+      'position',
+      'location',
+      'age',
+      'dateStart',
+    ]
+    // 「複雜列」：每列是元件，裡面每格也是元件，按鈕也是元件
+    const Cell = defineComponent({
+      props: ['value'],
+      setup(p) {
+        const text = computed(() => String(p.value))
+        return () => h('div', { class: 'cell' }, text.value)
+      },
+    })
+    const Btn = defineComponent({
+      props: ['label'],
+      setup(p) {
+        return () => h('button', p.label)
+      },
+    })
+    const RowComp = defineComponent({
+      props: ['row', 'style'],
+      setup(p) {
+        return () =>
+          h('div', { class: 'row', style: p.style }, [
+            ...FIELDS.map((f) => h(Cell, { value: p.row[f] })),
+            h(Btn, { label: '編輯' }),
+            h(Btn, { label: '刪除' }),
+          ])
+      },
+    })
+    const plainRow = (row, style, key) =>
+      h('div', { class: 'row', style, key }, [
+        ...FIELDS.map((f) => h('div', { class: 'cell' }, String(row[f]))),
+        h('button', '編輯'),
+        h('button', '刪除'),
+      ])
+
+    window.run = async (mode, kind, steps, stride) => {
+      const start = ref(0)
+      const app = createApp({
+        setup() {
+          return () => {
+            const s = start.value
+            const mk = (row, style, key) =>
+              kind === 'component'
+                ? h(RowComp, { row, style, key })
+                : plainRow(row, style, key)
+            if (mode === 'pool') {
+              // 真正的 DOM 回收：第 r 列永遠用第 r % 30 格，每格自己定位
+              const slots = []
+              for (let k = 0; k < POOL; k++) {
+                const r = s + ((((k - s) % POOL) + POOL) % POOL)
+                slots.push(
+                  mk(
+                    rows[r],
+                    {
+                      transform: `translateY(${r * H}px)`,
+                      position: 'absolute',
+                    },
+                    k,
+                  ),
+                )
+              }
+              return h(
+                'div',
+                { style: { position: 'relative', height: N * H + 'px' } },
+                slots,
+              )
+            }
+            const visible = rows.slice(s, s + POOL)
+            return h('div', { style: { height: N * H + 'px' } }, [
+              h(
+                'div',
+                { style: { transform: `translateY(${s * H}px)` } },
+                visible.map((row, offset) =>
+                  mk(row, null, mode === 'id' ? row.id : offset),
+                ),
+              ),
+            ])
+          }
+        },
+      })
+      const el = document.createElement('div')
+      document.body.appendChild(el)
+      app.mount(el)
+      await nextTick()
+      const t0 = performance.now()
+      for (let i = 1; i <= steps; i++) {
+        start.value = Math.min(N - POOL, i * stride)
+        await nextTick()
+      }
+      const ms = performance.now() - t0
+      app.unmount()
+      el.remove()
+      return +ms.toFixed(1)
+    }
+  </script>
+</body>

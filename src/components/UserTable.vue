@@ -54,7 +54,40 @@ const end = computed(() =>
     Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + OVERSCAN,
   ),
 )
-const visibleRows = computed(() => props.rows.slice(start.value, end.value))
+// DOM 回收：格子數量固定（視窗放得下的列數 + 上下緩衝），第 rowIndex 列固定交給
+// 第 rowIndex % poolSize 格。往下捲 1 列時，只有捲出去的那一格搬到最下面換資料，
+// 其餘格子的內容和位置都不變，不必一直建立、刪除 DOM。
+const poolSize = computed(
+  () => Math.ceil(viewportHeight.value / ROW_HEIGHT) + OVERSCAN * 2 + 1,
+)
+const slots = computed(() => {
+  const size = poolSize.value
+  const result: { slot: number; rowIndex: number; row: UserRow }[] = []
+  for (let slot = 0; slot < size; slot++) {
+    const rowIndex =
+      start.value + ((((slot - start.value) % size) + size) % size)
+    const row = props.rows[rowIndex]
+    if (row) result.push({ slot, rowIndex, row })
+  }
+  return result
+})
+
+// 回收的副作用：格子換成別筆資料時，焦點可能還留在原本那顆按鈕上，
+// 這時按 Enter 會操作到另一個人。所以記住焦點所在的列，列換人就把焦點移開。
+let focusedRowId: number | null = null
+function onFocusIn(event: FocusEvent) {
+  const row = (event.target as HTMLElement).closest<HTMLElement>('.row')
+  focusedRowId = row ? Number(row.dataset.id) : null
+}
+watch(
+  slots,
+  () => {
+    const active = document.activeElement as HTMLElement | null
+    const row = active?.closest<HTMLElement>('.body .row')
+    if (row && Number(row.dataset.id) !== focusedRowId) active!.blur()
+  },
+  { flush: 'post' },
+)
 
 let frame = 0
 function onScroll() {
@@ -154,103 +187,100 @@ function ariaSort(key: SortKey) {
     <div
       class="body"
       :style="{ height: `${rows.length * ROW_HEIGHT}px` }"
+      @focusin="onFocusIn"
     >
       <div
-        class="window"
-        :style="{ transform: `translateY(${start * ROW_HEIGHT}px)` }"
+        v-for="{ slot, rowIndex, row } in slots"
+        :key="slot"
+        class="row"
+        :class="{
+          pinned: row.pinnedAt !== null,
+          selected: selectedId === row.id,
+        }"
+        :style="{ transform: `translateY(${rowIndex * ROW_HEIGHT}px)` }"
+        role="row"
+        :aria-rowindex="rowIndex + 1"
+        :data-id="row.id"
+        @click="selectedId = row.id"
       >
         <div
-          v-for="(row, offset) in visibleRows"
-          :key="row.id"
-          class="row"
-          :class="{
-            pinned: row.pinnedAt !== null,
-            selected: selectedId === row.id,
-          }"
-          role="row"
-          :aria-rowindex="start + offset + 1"
-          :data-id="row.id"
-          @click="selectedId = row.id"
+          class="cell num"
+          role="cell"
         >
-          <div
-            class="cell num"
-            role="cell"
+          {{ (rowIndex + 1).toLocaleString() }}
+          <span
+            v-if="row.pinnedAt !== null"
+            class="pin-badge"
+            :title="`釘選在第 ${row.pinnedAt} 列`"
+            >📌</span
           >
-            {{ (start + offset + 1).toLocaleString() }}
-            <span
-              v-if="row.pinnedAt !== null"
-              class="pin-badge"
-              :title="`釘選在第 ${row.pinnedAt} 列`"
-              >📌</span
-            >
-          </div>
-          <div
-            class="cell id"
-            role="cell"
+        </div>
+        <div
+          class="cell id"
+          role="cell"
+        >
+          {{ row.id }}
+        </div>
+        <div
+          class="cell"
+          role="cell"
+        >
+          {{ row.userName }}
+        </div>
+        <div
+          class="cell"
+          role="cell"
+        >
+          {{ row.position }}
+        </div>
+        <div
+          class="cell"
+          role="cell"
+        >
+          {{ row.location }}
+        </div>
+        <div
+          class="cell"
+          role="cell"
+        >
+          {{ row.age }}
+        </div>
+        <div
+          class="cell"
+          role="cell"
+        >
+          {{ row.dateStart }}
+        </div>
+        <div
+          class="cell actions"
+          role="cell"
+        >
+          <button
+            class="btn small"
+            @click.stop="emit('edit', row)"
           >
-            {{ row.id }}
-          </div>
-          <div
-            class="cell"
-            role="cell"
+            編輯
+          </button>
+          <button
+            v-if="row.pinnedAt === null"
+            class="btn small"
+            @click.stop="emit('pin', row)"
           >
-            {{ row.userName }}
-          </div>
-          <div
-            class="cell"
-            role="cell"
+            釘選
+          </button>
+          <button
+            v-else
+            class="btn small"
+            @click.stop="emit('unpin', row)"
           >
-            {{ row.position }}
-          </div>
-          <div
-            class="cell"
-            role="cell"
+            取消釘選
+          </button>
+          <button
+            class="btn small danger"
+            @click.stop="emit('delete', row)"
           >
-            {{ row.location }}
-          </div>
-          <div
-            class="cell"
-            role="cell"
-          >
-            {{ row.age }}
-          </div>
-          <div
-            class="cell"
-            role="cell"
-          >
-            {{ row.dateStart }}
-          </div>
-          <div
-            class="cell actions"
-            role="cell"
-          >
-            <button
-              class="btn small"
-              @click.stop="emit('edit', row)"
-            >
-              編輯
-            </button>
-            <button
-              v-if="row.pinnedAt === null"
-              class="btn small"
-              @click.stop="emit('pin', row)"
-            >
-              釘選
-            </button>
-            <button
-              v-else
-              class="btn small"
-              @click.stop="emit('unpin', row)"
-            >
-              取消釘選
-            </button>
-            <button
-              class="btn small danger"
-              @click.stop="emit('delete', row)"
-            >
-              刪除
-            </button>
-          </div>
+            刪除
+          </button>
         </div>
       </div>
     </div>
@@ -273,10 +303,9 @@ function ariaSort(key: SortKey) {
 }
 .row {
   display: grid;
-  grid-template-columns: 96px 96px minmax(150px, 1.3fr) minmax(
-      170px,
-      1.4fr
-    ) minmax(110px, 1fr) 84px 120px 236px;
+  grid-template-columns:
+    96px 96px minmax(150px, 1.3fr) minmax(170px, 1.4fr)
+    minmax(110px, 1fr) 84px 120px 236px;
   min-width: 1090px;
   height: 44px;
   align-items: center;
@@ -292,7 +321,7 @@ function ariaSort(key: SortKey) {
 .body {
   position: relative;
 }
-.window {
+.body .row {
   position: absolute;
   inset: 0 0 auto 0;
 }

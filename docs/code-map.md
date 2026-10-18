@@ -8,7 +8,7 @@
 ```
 使用者捲動 / 輸入搜尋 / 點表頭 / 按刪除、編輯、釘選
         │
-UserTable.vue   虛擬捲動：不論載入幾筆，只畫看得到的約 30 列
+UserTable.vue   虛擬捲動 + DOM 回收：不論載入幾筆，固定約 34 個列元素輪流使用
         │ emit('loadMore')
 App.vue         確認視窗流程、搜尋防抖 300ms
         │
@@ -26,7 +26,7 @@ mock/*          測試用的假後端（附錄），接真 API 時在 main.ts �
 | 順序 | 檔案 | 解決什麼 |
 |---|---|---|
 | 1 | `src/composables/useUserList.ts`（98 行） | 一次載入 500 筆、取消過期請求、刪改後同步畫面 |
-| 2 | `src/components/UserTable.vue`（213 行） | 虛擬捲動、提早載入下一批 |
+| 2 | `src/components/UserTable.vue`（379 行） | 虛擬捲動 + DOM 回收、提早載入下一批 |
 | 3 | `src/api/http.ts`、`src/api/users.ts` | 打 API 的方式、AbortSignal |
 | 4 | `src/App.vue`（314 行） | 刪除、更新、釘選的確認視窗 |
 
@@ -58,7 +58,7 @@ async function loadMore() {
 }
 ```
 - **cursor** 是後端給的「書籤」，前端不必知道它的意義，只要原封不動地傳回去。
-- **觸發時機**在 `UserTable.vue:76-83`：離已載入的底部剩不到 150 列就先抓下一批（見第 3 節）。
+- **觸發時機**在 `UserTable.vue:109-116`：離已載入的底部剩不到 150 列就先抓下一批（見第 3 節）。
 
 ### 刪除後為什麼 cursor 要減 1
 `useUserList.ts:73-82`
@@ -117,13 +117,15 @@ const rows = shallowRef<UserRow[]>([])
 
 ---
 
-## 3. 虛擬捲動：用高度算出可視範圍（ADR 0007）
+## 3. 虛擬捲動 v1：用高度算出可視範圍（ADR 0007，已由 3-2 取代，保留原文）
+
+> 這一節是 v1 的原始說明，內容不改，方便對照。v1 的程式碼保留在 `src/components/legacy/UserTableKeyed.vue`（目前沒有被使用），下面的行號都指向那個檔案。v2 改了什麼、為什麼改，見 [3-2](#3-2-虛擬捲動-v2dom-回收adr-0012)。
 
 ### 問題
 捲到 5,000 筆，就有 5,000 列 × 8 格 = 4 萬個 DOM 節點。每個節點都佔記憶體，而且瀏覽器每次排版都要處理它們，捲動會卡。
 
 ### 做法：固定列高 → 用數學算出該畫哪幾列
-`src/components/UserTable.vue:37-57`
+`src/components/legacy/UserTableKeyed.vue:39-59`
 ```ts
 const ROW_HEIGHT = 44     // 每列固定 44px
 const OVERSCAN = 8        // 上下各多畫 8 列，快速捲動時不會閃白
@@ -140,7 +142,7 @@ const visibleRows = computed(() => props.rows.slice(start.value, end.value))
 - 只畫第 92～121 列，共 30 列，不論已經載入 500 筆還是 5 萬筆。
 
 ### 讓捲軸看起來是真的
-`UserTable.vue:154-161`
+`UserTableKeyed.vue:156-163`
 ```html
 <div class="body" :style="{ height: `${rows.length * ROW_HEIGHT}px` }">          <!-- 撐出完整高度，捲軸長度才正確 -->
   <div class="window" :style="{ transform: `translateY(${start * ROW_HEIGHT}px)` }"> <!-- 把那 30 列移到正確位置 -->
@@ -148,7 +150,7 @@ const visibleRows = computed(() => props.rows.slice(start.value, end.value))
 用 `transform` 而不是 `top`：transform 不會觸發重新排版（reflow），只需要重新合成畫面，比較順。
 
 ### 你說的 observer：這裡用的是 ResizeObserver，不是 IntersectionObserver
-`UserTable.vue:59-74`
+`UserTableKeyed.vue:61-76`
 ```ts
 function onScroll() {
   cancelAnimationFrame(frame)
@@ -163,7 +165,7 @@ observer = new ResizeObserver(([entry]) => (viewportHeight.value = entry.content
 | 為什麼這樣選 | 列高固定，用 scrollTop 算就知道範圍，不必替每一列掛監聽 | 要先把列渲染出來才能觀察，和「不渲染」的目標衝突 |
 
 ### 提早載入下一批
-`UserTable.vue:76-83`
+`UserTableKeyed.vue:78-85`
 ```ts
 watchEffect(() => {
   if (props.hasMore && !props.loading && props.rows.length - end.value < PREFETCH_ROWS) emit('loadMore')
@@ -177,6 +179,90 @@ watchEffect(() => {
 
 ### 怎麼驗證（事實）
 e2e 第 2 步：已載入 500 筆，但 DOM 裡只有 25 列（`e2e/run.mjs`）。
+
+---
+
+## 3-2. 虛擬捲動 v2：DOM 回收（ADR 0012）
+
+> 一句話：v1 是「捲出去的列刪掉、捲進來的列新建」；v2 是「固定一組列元素，捲出去的那一格搬到另一頭、換上新資料」。方案比較見 [virtual-scroll-options.md](virtual-scroll-options.md)。
+
+### 為什麼要改（事實：`npm run bench:scroll` 實測）
+這個想法是在讀 v1 的 DOM 時提出的：「既然畫面上一直只有那幾十列，能不能不刪不建，只換資料？」實測結果：
+
+| 每捲一步的平均耗時 | v1（id 當 key） | v2（DOM 回收） |
+|---|---|---|
+| 一般列，慢慢捲 | 0.10–0.14ms | 0.06ms |
+| 一般列，快速拖曳 | 0.24–0.85ms | 0.10–0.17ms |
+| 列裡有子元件，慢慢捲 | 0.10ms | 0.04–0.05ms |
+| 列裡有子元件，快速拖曳 | 1.8–3.2ms | 0.29–0.39ms |
+
+- 兩者都遠低於一幀 16.7ms，現在的表格用 v1 也不會卡。
+- 差距在「快速拖曳」和「列裡有元件」時最大（約 5–10 倍）。之後列裡加上下拉選單、標籤等元件時，v1 每次要卸載、重建元件，v2 只更新 props。
+- 所以採用 v2 的理由是：**成本不高（約 40 行），而且把未來加功能的效能風險先處理掉**，不是因為現在卡。
+
+### 沒變的部分
+- 算範圍的數學一樣：`UserTable.vue:48-56` 的 `start`、`end`（同 v1 的第 3 節）。
+- ResizeObserver 取得視窗高度：`UserTable.vue:100-107`。
+- 提早載入下一批：`UserTable.vue:109-116`。
+
+### 新增 1：固定格子數，用取餘數決定「第幾列放哪一格」
+`src/components/UserTable.vue:57-73`
+```ts
+const poolSize = computed(() => Math.ceil(viewportHeight.value / ROW_HEIGHT) + OVERSCAN * 2 + 1)
+const slots = computed(() => {
+  for (let slot = 0; slot < size; slot++) {
+    const rowIndex = start.value + ((((slot - start.value) % size) + size) % size)
+    ...
+  }
+})
+```
+**代入數字**：視窗高 600px → `poolSize = ceil(600/44) + 8×2 + 1 = 14 + 17 = 34` 格。
+- 第 rowIndex 列固定放在第 `rowIndex % 34` 格。
+- 從 `start = 100` 往下捲一列變成 `start = 101`：第 100 列捲出去，它在第 `100 % 34 = 32` 格；新進來的第 134 列，`134 % 34 = 32`，也是第 32 格。
+- 結果：**只有第 32 格換資料、搬到最下面**，其他 33 格的內容和位置都不動。
+
+### 新增 2：每一列自己定位，key 用格子編號
+`UserTable.vue:192-205`
+```html
+<div v-for="{ slot, rowIndex, row } in slots" :key="slot"
+     :style="{ transform: `translateY(${rowIndex * ROW_HEIGHT}px)` }"
+     :aria-rowindex="rowIndex + 1" :data-id="row.id">
+```
+- `:key="slot"`：Vue 看到 key 沒變，就沿用同一個 DOM，只更新文字和屬性。v1 用 `row.id`，資料一換 key 就變，Vue 只好刪掉重建。
+- 每列各自 `translateY(rowIndex × 44)`，取代 v1 的整塊 `.window` 位移，因為格子在 DOM 裡的順序已經不是畫面順序。
+- `aria-rowindex`：告訴螢幕閱讀器「這是第幾列」，補回 DOM 順序和畫面順序不同的問題。
+
+### 新增 3：焦點保護
+`UserTable.vue:75-90`
+```ts
+watch(slots, () => {
+  const active = document.activeElement
+  const row = active?.closest('.body .row')
+  if (row && Number(row.dataset.id) !== focusedRowId) active.blur()   // 格子換人了，就把焦點移開
+}, { flush: 'post' })
+```
+**為什麼一定要做**：使用者用 Tab 把焦點移到 #120 的「刪除」按鈕，接著用滾輪往下捲。v2 會把同一顆按鈕拿去顯示 #154。如果焦點還留在上面，按 Enter 刪掉的就是 #154。
+**支付類比**：結帳頁的「確認付款」按鈕被重用到另一筆訂單上，焦點卻沒移開，按 Enter 就付錯單。
+
+### 和 v1 的差異
+| | v1（第 3 節） | v2（本節） |
+|---|---|---|
+| `v-for` 的 key | `row.id` | 格子編號 `slot` |
+| 捲動時的 DOM | 捲出去的刪掉、捲進來的新建 | 同一組約 34 個元素沿用，只換內容 |
+| 定位 | 外層 `.window` 整塊 `translateY(start × 44)` | 每列各自 `translateY(rowIndex × 44)` |
+| DOM 順序 | 等於畫面順序 | 不等於，用 `aria-rowindex` 標示 |
+| 焦點 | 列被刪掉，焦點自然消失 | 要自己處理，不然會操作到別人 |
+| 列裡的暫存狀態 | 跟著列一起刪掉，不會殘留 | 會留在格子上，所以狀態一律用 `row.id` 存（例如 `selectedId`） |
+
+### 代價
+- 狀態不能放在格子（DOM 或子元件）裡，否則會「傳染」給下一筆資料。勾選、展開等狀態要放在 `Set<id>`、`Map<id, ...>`。
+- 仍然只支援固定列高。
+- 測試要依 `aria-rowindex` 排序後再比對，不能直接看 DOM 順序（`e2e/run.mjs` 的 `rowsData`）。
+
+### 怎麼驗證（事實）
+- e2e「DOM 回收」：記下 34 個列元素，捲 40 列後，34 個元素全部是原本那批，只有內容變了。
+- e2e「焦點保護」：焦點在第 20 列，捲到第 1 列（第 20 列還看得到）→ 焦點保留；焦點在第 1 列，捲到第 300 列（格子換人）→ 焦點被移開。
+- 效能：`npm run bench:scroll`，結果如上表。
 
 ---
 
@@ -239,7 +325,7 @@ type Dialog =
 - 讓使用者輸入位置並驗證是 1 以上的整數（`components/PinDialog.vue`）。
 - 呼叫 `PUT /api/users/:id/pin`，成功後 `reload()` 從頭查詢（`useUserList.ts:93-101`）。
 - 位置已被別人釘選時，後端回 409，視窗直接顯示錯誤訊息，不關窗。
-- 依 `pinnedAt` 欄位顯示 📌（`UserTable.vue:180`），並切換「釘選 / 取消釘選」按鈕（233-246 行）。
+- 依 `pinnedAt` 欄位顯示 📌（`UserTable.vue:211`），並切換「釘選 / 取消釘選」按鈕（264-277 行）。
 
 ---
 
@@ -258,7 +344,7 @@ type Dialog =
 |---|---|---|---|
 | 傳輸 | 一次只拿 500 筆 | `useUserList.ts:6, 33` | 只持有看過的資料，不是 1,000 萬筆 |
 | 狀態 | `shallowRef`，不替每筆資料建 Proxy | `useUserList.ts:11` | 見第 2 節實測 |
-| 畫面 | 虛擬捲動 | `UserTable.vue:37-57` | DOM 固定約 25–30 列 |
+| 畫面 | 虛擬捲動 + DOM 回收 | `UserTable.vue:57-73` | DOM 固定約 34 個列元素，輪流使用 |
 | 回收 | 清空、取消、卸載時清理 | 見第 7 節 | 不要的東西能被回收 |
 
 ---
@@ -273,9 +359,9 @@ JS **沒有**「手動釋放記憶體」的 API。引擎會定期找出「再也
 |---|---|---|
 | 重新查詢時清空列表 | `useUserList.ts:56` `rows.value = []` | 舊的幾百到幾萬個列物件失去引用，下次 GC 會回收 |
 | 換新陣列而不是修改 | `useUserList.ts:38,77,88` | 舊陣列失去引用（列物件本身沿用，不會重複佔用） |
-| 虛擬捲動 | `UserTable.vue:57`、`v-for :key="row.id"`（163-164） | 捲出畫面的列，Vue 會卸載它的 DOM 和 vnode |
+| 虛擬捲動 + DOM 回收 | `UserTable.vue:57-73`、`v-for :key="slot"`（192-194） | 捲出畫面的列不卸載，格子直接換成新資料，捲動時幾乎不產生要回收的 DOM（v1 是卸載後等 GC） |
 | 取消過期請求 | `useUserList.ts:54`、`server.ts:98-109` | 舊請求的結果直接丟掉，事件監聽也移除，不會殘留 |
-| 元件卸載時清理 | `useUserList.ts:104`、`UserTable.vue:74` | 取消請求、`observer.disconnect()`，避免記憶體洩漏（leak：該回收卻一直被引用） |
+| 元件卸載時清理 | `useUserList.ts:104`、`UserTable.vue:107` | 取消請求、`observer.disconnect()`，避免記憶體洩漏（leak：該回收卻一直被引用） |
 
 ### 還沒做的：已載入資料的「滑動視窗回收」（ADR 0011 列為待做）
 **目前的限制（事實）**：使用者一路往下捲，`rows` 會一直變長。捲到 5 萬筆，主執行緒就持有 5 萬個物件（推測約 10MB 上下，沒有實測）。DOM 不會變多，但 JS 物件會。
@@ -311,11 +397,12 @@ Chrome DevTools → Memory 分頁：
 1. 為什麼用 cursor 而不是頁碼？刪除後 cursor 為什麼要減 1？（第 1 節）
 2. 為什麼用 `shallowRef`？為什麼不能直接 push？（第 2 節）
 3. 虛擬捲動怎麼算出要畫哪幾列？為什麼列高要固定？用的是哪個 Observer？（第 3 節）
-4. AbortController 解決什麼問題？為什麼修改類請求不取消？（第 4 節）
-5. 確認視窗的狀態怎麼管理？後端回 422、409 時畫面怎麼處理？（第 5 節）
-6. Vue 的虛擬 DOM 和虛擬捲動差在哪？（第 6 節）
-7. 使用者一路往下捲，記憶體會怎樣？怎麼改善？（第 7 節）
-8. 50 人同時使用，前端能做什麼？（ADR 0011：搜尋防抖、取消過期請求、相同查詢快取、409 版本衝突提示）
+4. DOM 回收和 v1 差在哪？為什麼 key 要用格子編號？為什麼一定要處理焦點？（第 3-2 節）
+5. AbortController 解決什麼問題？為什麼修改類請求不取消？（第 4 節）
+6. 確認視窗的狀態怎麼管理？後端回 422、409 時畫面怎麼處理？（第 5 節）
+7. Vue 的虛擬 DOM 和虛擬捲動差在哪？（第 6 節）
+8. 使用者一路往下捲，記憶體會怎樣？怎麼改善？（第 7 節）
+9. 50 人同時使用，前端能做什麼？（ADR 0011：搜尋防抖、取消過期請求、相同查詢快取、409 版本衝突提示）
 
 ---
 

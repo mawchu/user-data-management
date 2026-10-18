@@ -10,6 +10,7 @@ npm install
 npm run dev          # 開發模式，打開 http://localhost:5173
 npm test             # 單元測試（33 項）
 npm run perf         # 10,000,000 筆效能量測
+npm run bench:scroll # 虛擬捲動三種寫法的效能比較（v1 / 簡單版 / DOM 回收）
 npm run build && npm run preview   # 正式建置後預覽（http://localhost:4173）
 node e2e/run.mjs     # 瀏覽器端對端測試（需先啟動 preview；Chromium 路徑用 CHROMIUM 環境變數指定）
 ```
@@ -20,7 +21,7 @@ node e2e/run.mjs     # 瀏覽器端對端測試（需先啟動 preview；Chromiu
 ## 功能對照
 | 需求 | 做法 |
 |---|---|
-| 千萬筆資料、每次 500 筆、無限捲動 | 捲到離底部 150 列內就載入下一批；列表用虛擬捲動（只渲染畫面看得到的約 25 列） |
+| 千萬筆資料、每次 500 筆、無限捲動 | 捲到離底部 150 列內就載入下一批；列表用虛擬捲動加 DOM 回收（固定約 34 個列元素輪流換資料） |
 | 刪除＋確認視窗 | 確認視窗顯示要刪的人，按「確定刪除」才呼叫 API |
 | 更新＋確認視窗 | 表單 →「下一步」→ 確認視窗列出「原本 / 改為」→「確定更新」；前後端共用驗證規則 |
 | 搜尋所有欄位 | 一個搜尋框，不分大小寫、部分符合任一欄位；停止輸入 300ms 才查詢 |
@@ -31,7 +32,8 @@ node e2e/run.mjs     # 瀏覽器端對端測試（需先啟動 preview；Chromiu
 ```
 src/
   # 前端
-  components/UserTable.vue    虛擬捲動表格：只渲染看得到的列，快到底時提早載入下一批
+  components/UserTable.vue    虛擬捲動表格：DOM 回收、只渲染看得到的列，快到底時提早載入下一批
+  components/legacy/          v1 表格（id 當 key），保留對照，沒有被使用
   components/*Dialog.vue      編輯、確認、釘選對話框（原生 <dialog>）
   App.vue                     對話框流程、搜尋防抖
   composables/useUserList.ts  列表狀態：每次 500 筆、shallowRef、AbortController、刪改後同步
@@ -75,7 +77,7 @@ DELETE /api/users/:id/pin
 ### 前端
 | 決定 | 理由 | 代價 |
 |---|---|---|
-| 自己寫虛擬捲動，不引入 UI 套件 | 不論載入幾筆，DOM 固定約 25–30 列；能說明原理、少一個大型依賴 | 列高必須固定 |
+| 自己寫虛擬捲動，加上 DOM 回收（ADR 0007 → 0012） | 不論載入幾筆，DOM 固定約 34 個元素沿用；快速拖曳、列裡有元件時比 v1 快 5–10 倍（`npm run bench:scroll`） | 列高必須固定；狀態要用 id 存；要自己處理焦點 |
 | 列表用 `shallowRef`，修改時換新陣列 | 上萬筆資料不需要深層響應式；實測 concat、findIndex 快 5–20 倍 | 不能直接改 `rows[i].x`，要用 concat / toSpliced / with |
 | 換搜尋或排序時用 AbortController 取消舊查詢 | 避免慢的舊結果晚回來蓋掉新結果 | — |
 | 修改類請求不取消 | 送出後後端可能已經改好，取消只會讓畫面和資料不一致 | — |
@@ -97,7 +99,7 @@ DELETE /api/users/:id/pin
 ## 已驗證
 - `npm test`：33 項通過（資料層 26 項、mock fetch 與取消 6 項、列表取消 1 項）。資料層測五個欄位升/降冪、7 組搜尋字、釘選、刪除、更新、錯誤處理，都和參考實作逐筆比對。
 - `npm run perf`（Node 22，10,000,000 筆）：產生 348ms；排序 189–450ms；搜尋 85–173ms；刪除 22ms；記憶體約 183MB。
-- `node e2e/run.mjs`（Chromium，10,000,000 筆）：15 項（含快速連點表頭取消 2 個過期請求）實際操作全部通過，截圖在 `e2e/screenshots/`。
+- `node e2e/run.mjs`（Chromium，10,000,000 筆）：17 項（含快速連點表頭取消 2 個過期請求、DOM 回收沿用同一批元素、焦點保護）實際操作全部通過，截圖在 `e2e/screenshots/`。
 
 ## 尚未處理
 - 一個人一直往下捲，已載入的列會一直累積（每 1 萬列約幾 MB）。可改成只保留最近幾批。
