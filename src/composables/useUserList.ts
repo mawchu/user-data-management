@@ -1,0 +1,91 @@
+import { reactive, ref, shallowRef } from 'vue'
+import { usersApi } from '../api/users'
+import type { SortKey, SortOrder, UserInput, UserRow } from '../types/user'
+
+const BATCH = 500
+
+/** 列表狀態：無限捲動載入、搜尋、排序，以及刪除/更新/釘選後同步畫面 */
+export function useUserList() {
+  // shallowRef：數萬筆資料不需要深層響應式，省記憶體也更快
+  const rows = shallowRef<UserRow[]>([])
+  const total = ref(0)
+  const loading = ref(false)
+  const hasMore = ref(true)
+  const error = ref<string | null>(null)
+  const resetKey = ref(0)
+  const query = reactive<{ q: string; sortBy: SortKey | null; order: SortOrder }>({ q: '', sortBy: null, order: 'asc' })
+
+  let cursor: string | null = null
+  // 每次重新查詢就換一個 token，舊請求晚回來時直接丟掉，避免結果錯亂
+  let token = 0
+
+  async function loadMore() {
+    if (loading.value || !hasMore.value) return
+    loading.value = true
+    error.value = null
+    const t = token
+    try {
+      const res = await usersApi.list({ ...query, cursor, limit: BATCH })
+      if (t !== token) return
+      // 換成新陣列（而不是 push）：子元件的 props 才會偵測到變化
+      rows.value = rows.value.concat(res.data)
+      total.value = res.total
+      cursor = res.nextCursor
+      hasMore.value = res.hasMore
+    } catch (e) {
+      if (t === token) error.value = (e as Error).message
+    } finally {
+      if (t === token) loading.value = false
+    }
+  }
+
+  function reload() {
+    token++
+    rows.value = []
+    cursor = null
+    hasMore.value = true
+    loading.value = false
+    resetKey.value++
+    return loadMore()
+  }
+
+  /** 表頭點擊：未排序 → 升冪 → 降冪 → 未排序 */
+  function toggleSort(key: SortKey) {
+    if (query.sortBy !== key) Object.assign(query, { sortBy: key, order: 'asc' })
+    else if (query.order === 'asc') query.order = 'desc'
+    else Object.assign(query, { sortBy: null, order: 'asc' })
+    return reload()
+  }
+
+  async function removeRow(id: number) {
+    await usersApi.remove(id)
+    const i = rows.value.findIndex((r) => r.id === id)
+    if (i >= 0) {
+      rows.value = rows.value.toSpliced(i, 1)
+      // 後端快照也少了這一列，游標往前一格，下一批才不會漏掉資料
+      if (cursor) cursor = String(Number(cursor) - 1)
+    }
+    total.value--
+  }
+
+  async function updateRow(id: number, input: UserInput) {
+    const updated = await usersApi.update(id, input)
+    const i = rows.value.findIndex((r) => r.id === id)
+    if (i >= 0) {
+      rows.value = rows.value.with(i, updated)
+    }
+    return updated
+  }
+
+  async function pinRow(id: number, position: number) {
+    await usersApi.pin(id, position)
+    await reload()
+  }
+
+  async function unpinRow(id: number) {
+    await usersApi.unpin(id)
+    await reload()
+  }
+
+  return { rows, total, loading, hasMore, error, query, resetKey, loadMore, reload, toggleSort, removeRow, updateRow, pinRow, unpinRow }
+}
