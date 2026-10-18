@@ -26,12 +26,12 @@ export function useUserList() {
     loading.value = true
     error.value = null
     try {
-      const res = await usersApi.list({ ...query, cursor, limit: BATCH }, current.signal)
+      const response = await usersApi.list({ ...query, cursor, limit: BATCH }, current.signal)
       // 換成新陣列（而不是 push）：子元件的 props 才會偵測到變化
-      rows.value = rows.value.concat(res.data)
-      total.value = res.total
-      cursor = res.nextCursor
-      hasMore.value = res.hasMore
+      rows.value = rows.value.concat(response.data)
+      total.value = response.total
+      cursor = response.nextCursor
+      hasMore.value = response.hasMore
     } catch (requestError) {
       if (!isAbortError(requestError)) error.value = (requestError as Error).message
     } finally {
