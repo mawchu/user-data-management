@@ -4,17 +4,20 @@
  * 每個欄位存成一個 TypedArray（固定型別的數字陣列），字串欄位只存「字典編號」：
  * 例如 position 只有十幾種值，每列只要 1 byte 記它是第幾種。1,000 萬列約佔 70MB。
  * 因為每個欄位的不同值都不多，排序用 counting sort（計數排序，O(n)），不用一般比較排序。
+ *
+ * 這裡只是讓前端能在接近題目的資料量下測試的 mock 後端，不是這份作業的重點。
+ * 對外的行為（API 契約）寫在 docs/api.md。
  */
 import type {
-  PinInfo,
   SortKey,
+  SortOrder,
   User,
   UserInput,
   UserListQuery,
   UserListResponse,
-  UserRow,
 } from '../types/user'
 import { validateUserInput } from '../utils/validate'
+import { matchesKeyword, normalizeKeyword } from '../utils/match'
 
 export const MAX_LIMIT = 500
 
@@ -205,41 +208,67 @@ function mulberry32(seed: number) {
 interface Snapshot {
   key: string
   keyword: string
-  view: Uint32Array // 未釘選、符合條件的列索引，已排序
+  sortBy: SortKey | null
+  order: SortOrder
+  /** 符合條件的列索引，已排序（建立後才刪除的列仍在裡面，輸出時跳過） */
+  view: Uint32Array
+  /** 建立快照當下每列的排序欄位值（字串欄位是字典編號），之後有人修改也不影響二分搜尋 */
+  codes: Uint32Array | null
+  /** 建立快照當下字串欄位的名次表 */
+  rank: Uint32Array | null
   length: number
-  pins: PinInfo[] // 符合條件的釘選列，依位置排序
+  /** 建立快照當下的列數，之後新增的列不在快照裡 */
+  builtRowCount: number
+  /** 建立後被刪除、且原本在快照裡的列數 */
+  removed: number
 }
 
+/** cursor 內容：上一批最後一筆的排序值與 id。前端只原樣帶回，不解析 */
+interface CursorData {
+  code: number
+  id: number
+}
+
+const SORT_KEYS: SortKey[] = [
+  'userName',
+  'position',
+  'location',
+  'age',
+  'dateStart',
+]
+
 export class UserDb {
-  readonly size: number
   private names = new Dict(0xffff)
   private positions = new Dict(0xff, POSITIONS)
   private locations = new Dict(0xff, LOCATIONS)
-  // 每個欄位一條陣列，第 rowIndex 格就是第 rowIndex 列的值（字串欄位存字典編號）
+  // 每個欄位一條陣列，第 rowIndex 格就是第 rowIndex 列的值（字串欄位存字典編號）。id = rowIndex + 1
   private nameIds: Uint16Array
   private positionIds: Uint8Array
   private locationIds: Uint8Array
   private ages: Uint8Array
   private startDays: Uint16Array // 1950-01-01 起算的天數
+  private versions: Uint32Array
   private deleted: Uint8Array
-  private pinnedFlag: Uint8Array
-  private pins = new Map<number, number>() // id -> 目標位置（1 起算）
+  /** 已使用的列數（含已刪除）；下一筆新增的 id = rowCount + 1 */
+  private rowCount: number
   private liveCount: number
   private bufferA: Uint32Array
   private bufferB: Uint32Array | null = null
+  private codeBuffer: Uint32Array | null = null
   private snapshot: Snapshot | null = null
 
   constructor(size = 10_000_000, seed = 20261017) {
-    this.size = size
+    this.rowCount = size
     this.liveCount = size
-    this.nameIds = new Uint16Array(size)
-    this.positionIds = new Uint8Array(size)
-    this.locationIds = new Uint8Array(size)
-    this.ages = new Uint8Array(size)
-    this.startDays = new Uint16Array(size)
-    this.deleted = new Uint8Array(size)
-    this.pinnedFlag = new Uint8Array(size)
-    this.bufferA = new Uint32Array(size)
+    const capacity = Math.max(size, 16)
+    this.nameIds = new Uint16Array(capacity)
+    this.positionIds = new Uint8Array(capacity)
+    this.locationIds = new Uint8Array(capacity)
+    this.ages = new Uint8Array(capacity)
+    this.startDays = new Uint16Array(capacity)
+    this.versions = new Uint32Array(capacity).fill(1)
+    this.deleted = new Uint8Array(capacity)
+    this.bufferA = new Uint32Array(capacity)
 
     for (const firstName of FIRST_NAMES)
       for (const lastName of LAST_NAMES)
@@ -261,63 +290,107 @@ export class UserDb {
     return this.liveCount
   }
 
-  /** GET /api/users */
+  /**
+   * GET /api/users
+   * cursor 是「上一批最後一筆的排序值 + id」（keyset）。下一批從排在它後面的第一筆開始，
+   * 所以中途有人新增、刪除，或快照被別人的查詢重建，都不會漏掉或重複。
+   */
   list(query: UserListQuery = {}): UserListResponse {
-    const keyword = (query.q ?? '').trim().toLowerCase()
-    const sortBy = query.sortBy ?? null
-    const order = query.order === 'desc' ? 'desc' : 'asc'
+    const keyword = normalizeKeyword(query.q ?? '')
+    const sortBy =
+      query.sortBy && SORT_KEYS.includes(query.sortBy) ? query.sortBy : null
+    const order: SortOrder = query.order === 'desc' ? 'desc' : 'asc'
     const limit = Math.min(
       Math.max(1, Math.trunc(query.limit ?? MAX_LIMIT)),
       MAX_LIMIT,
     )
     const key = `${keyword}\u0000${sortBy}\u0000${sortBy ? order : ''}`
+    const cursor = query.cursor == null ? null : this.parseCursor(query.cursor)
 
-    let offset = 0
-    if (query.cursor != null) {
-      offset = Number(query.cursor)
-      if (!Number.isInteger(offset) || offset < 0)
-        throw new ApiError(400, 'cursor 格式錯誤')
-    }
-    // 第一批一律重算；之後的批次沿用同一份快照，資料才不會在捲動中跳動
-    if (offset === 0 || this.snapshot?.key !== key)
+    // 第一批一律重算；之後的批次沿用快照。字典在建立後新增過值時也要重算，名次才對得上
+    if (
+      !cursor ||
+      this.snapshot?.key !== key ||
+      (this.snapshot.rank && cursor.code >= this.snapshot.rank.length)
+    )
       this.snapshot = this.build(key, keyword, sortBy, order)
-
     const snapshot = this.snapshot
-    const total = snapshot.length + snapshot.pins.length
-    const end = Math.min(offset + limit, total)
-    const data: UserRow[] = []
-    const pinSlots = this.effectivePinPositions(snapshot)
-    // 跳過 offset 之前的釘選列；剩下的位置由一般列依序填入
-    let pinIndex = 0
-    while (pinIndex < pinSlots.length && pinSlots[pinIndex] < offset) pinIndex++
-    let viewIndex = offset - pinIndex
-    for (let position = offset; position < end; position++) {
-      if (pinIndex < pinSlots.length && pinSlots[pinIndex] === position) {
-        const pin = snapshot.pins[pinIndex++]
-        data.push({ ...this.toUser(pin.id - 1), pinnedAt: pin.position })
-      } else {
-        data.push({
-          ...this.toUser(snapshot.view[viewIndex++]),
-          pinnedAt: null,
-        })
-      }
+
+    let position = cursor ? this.positionAfter(snapshot, cursor) : 0
+    const data: User[] = []
+    let last = -1
+    for (; position < snapshot.length && data.length < limit; position++) {
+      const rowIndex = snapshot.view[position]
+      if (this.deleted[rowIndex]) continue
+      data.push(this.toUser(rowIndex))
+      last = position
     }
-    const hasMore = end < total
-    return { data, nextCursor: hasMore ? String(end) : null, hasMore, total }
+    while (position < snapshot.length && this.deleted[snapshot.view[position]])
+      position++
+    const hasMore = position < snapshot.length
+    return {
+      data,
+      nextCursor: hasMore ? this.makeCursor(snapshot, last) : null,
+      hasMore,
+      total: snapshot.length - snapshot.removed,
+    }
   }
 
   /** GET /api/users/:id */
-  get(id: number): UserRow {
-    const rowIndex = this.indexOf(id)
-    return { ...this.toUser(rowIndex), pinnedAt: this.pins.get(id) ?? null }
+  get(id: number): User {
+    return this.toUser(this.indexOf(id))
   }
 
-  /** PATCH /api/users/:id */
-  update(id: number, input: UserInput): UserRow {
+  /** POST /api/users */
+  create(input: UserInput): User {
+    this.validate(input)
+    const rowIndex = this.rowCount
+    if (rowIndex >= this.ages.length) this.grow(this.ages.length * 2)
+    this.write(rowIndex, input)
+    this.versions[rowIndex] = 1
+    this.rowCount++
+    this.liveCount++
+    return this.toUser(rowIndex)
+  }
+
+  /**
+   * PATCH /api/users/:id
+   * 帶了 version 時，和目前版本不同就回 409，避免默默蓋掉別人剛改的內容。
+   */
+  update(id: number, input: UserInput, version?: number): User {
     const rowIndex = this.indexOf(id)
+    if (version !== undefined && version !== this.versions[rowIndex])
+      throw new ApiError(409, '這筆資料已被其他人修改', {
+        current: this.toUser(rowIndex),
+      })
+    this.validate(input)
+    this.write(rowIndex, input)
+    this.versions[rowIndex]++
+    // 已載入的快照不重排：剛改的列留在原位，下次重新查詢才會依新值排序
+    return this.toUser(rowIndex)
+  }
+
+  /** DELETE /api/users/:id */
+  remove(id: number): void {
+    const rowIndex = this.indexOf(id)
+    const snapshot = this.snapshot
+    if (
+      snapshot &&
+      rowIndex < snapshot.builtRowCount &&
+      this.matches(rowIndex, snapshot.keyword)
+    )
+      snapshot.removed++
+    this.deleted[rowIndex] = 1
+    this.liveCount--
+  }
+
+  private validate(input: UserInput) {
     const errors = validateUserInput(input)
     if (Object.keys(errors).length)
       throw new ApiError(422, '資料驗證失敗', errors)
+  }
+
+  private write(rowIndex: number, input: UserInput) {
     // 先把三個字典都加好，任何一個爆上限就整筆不改
     const nameId = this.names.add(input.userName.trim())
     const positionId = this.positions.add(input.position.trim())
@@ -327,66 +400,36 @@ export class UserDb {
     this.locationIds[rowIndex] = locationId
     this.ages[rowIndex] = input.age
     this.startDays[rowIndex] = toDay(input.dateStart)
-    // 已載入的快照不重排：使用者剛改的列留在原位，下次重新查詢才會依新值排序
-    return this.get(id)
   }
 
-  /** DELETE /api/users/:id */
-  remove(id: number): void {
-    const rowIndex = this.indexOf(id)
-    this.deleted[rowIndex] = 1
-    this.liveCount--
-    const snapshot = this.snapshot
-    if (this.pins.delete(id)) {
-      this.pinnedFlag[rowIndex] = 0
-      if (snapshot) snapshot.pins = snapshot.pins.filter((pin) => pin.id !== id)
-    } else if (snapshot) {
-      const viewIndex = snapshot.view
-        .subarray(0, snapshot.length)
-        .indexOf(rowIndex)
-      if (viewIndex >= 0) {
-        snapshot.view.copyWithin(viewIndex, viewIndex + 1, snapshot.length)
-        snapshot.length--
-      }
+  /** 新增資料時容量不夠：配置更大的陣列再複製 */
+  private grow(capacity: number) {
+    const copy = <T extends { length: number; set(array: T): void }>(
+      array: T,
+      make: (length: number) => T,
+    ) => {
+      const next = make(capacity)
+      next.set(array)
+      return next
     }
-  }
-
-  /** PUT /api/users/:id/pin */
-  pin(id: number, position: number): UserRow {
-    const rowIndex = this.indexOf(id)
-    if (!Number.isInteger(position) || position < 1)
-      throw new ApiError(422, '位置需為 1 以上的整數')
-    for (const [otherId, otherPosition] of this.pins) {
-      if (otherPosition === position && otherId !== id)
-        throw new ApiError(409, `第 ${position} 列已被 #${otherId} 釘選`)
-    }
-    this.pins.set(id, position)
-    this.pinnedFlag[rowIndex] = 1
+    this.nameIds = copy(this.nameIds, (n) => new Uint16Array(n))
+    this.positionIds = copy(this.positionIds, (n) => new Uint8Array(n))
+    this.locationIds = copy(this.locationIds, (n) => new Uint8Array(n))
+    this.ages = copy(this.ages, (n) => new Uint8Array(n))
+    this.startDays = copy(this.startDays, (n) => new Uint16Array(n))
+    this.versions = copy(this.versions, (n) => new Uint32Array(n))
+    this.deleted = copy(this.deleted, (n) => new Uint8Array(n))
+    this.bufferA = new Uint32Array(capacity)
+    this.bufferB = null
+    this.codeBuffer = null
     this.snapshot = null
-    return this.get(id)
-  }
-
-  /** DELETE /api/users/:id/pin */
-  unpin(id: number): UserRow {
-    const rowIndex = this.indexOf(id)
-    this.pins.delete(id)
-    this.pinnedFlag[rowIndex] = 0
-    this.snapshot = null
-    return this.get(id)
-  }
-
-  /** GET /api/pins */
-  listPins(): PinInfo[] {
-    return [...this.pins]
-      .map(([id, position]) => ({ id, position }))
-      .sort((pinA, pinB) => pinA.position - pinB.position)
   }
 
   private indexOf(id: number): number {
     if (
       !Number.isInteger(id) ||
       id < 1 ||
-      id > this.size ||
+      id > this.rowCount ||
       this.deleted[id - 1]
     )
       throw new ApiError(404, `找不到使用者 #${id}`)
@@ -401,33 +444,70 @@ export class UserDb {
       location: this.locations.values[this.locationIds[rowIndex]],
       age: this.ages[rowIndex],
       dateStart: dayToDateString(this.startDays[rowIndex]),
+      version: this.versions[rowIndex],
     }
   }
 
-  /**
-   * 釘選列的實際位置（0 起算）。目標位置超過資料總數時，依序排在最後面。
-   * 例：只剩 3 筆一般資料，釘在第 100 列的資料會出現在第 4 列。
-   */
-  private effectivePinPositions(snapshot: Snapshot): number[] {
-    return snapshot.pins.map((pin, pinOrder) =>
-      Math.min(pin.position - 1, snapshot.length + pinOrder),
-    )
+  private parseCursor(cursor: string): CursorData {
+    const [code, id] = cursor.split('.').map(Number)
+    if (!Number.isInteger(code) || !Number.isInteger(id) || id < 1)
+      throw new ApiError(400, 'cursor 格式錯誤')
+    return { code, id }
+  }
+
+  private makeCursor(snapshot: Snapshot, position: number): string {
+    const rowIndex = snapshot.view[position]
+    const code = snapshot.codes ? snapshot.codes[position] : 0
+    return `${code}.${rowIndex + 1}`
+  }
+
+  /** 排序用的比較值：快照依「比較值由小到大、同值時 id 由小到大」排列 */
+  private sortValue(snapshot: Snapshot, code: number): number {
+    const value = snapshot.rank ? snapshot.rank[code] : code
+    if (snapshot.order === 'asc') return value
+    const buckets = snapshot.rank
+      ? snapshot.rank.length
+      : this.buckets(snapshot.sortBy!)
+    return buckets - 1 - value
+  }
+
+  /** 二分搜尋：快照中第一個排在 cursor 後面的位置 */
+  private positionAfter(snapshot: Snapshot, cursor: CursorData): number {
+    const target = snapshot.codes ? this.sortValue(snapshot, cursor.code) : 0
+    const targetRow = cursor.id - 1
+    let low = 0
+    let high = snapshot.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      const value = snapshot.codes
+        ? this.sortValue(snapshot, snapshot.codes[middle])
+        : 0
+      const isAfter =
+        value > target ||
+        (value === target && snapshot.view[middle] > targetRow)
+      if (isAfter) high = middle
+      else low = middle + 1
+    }
+    return low
+  }
+
+  private buckets(sortBy: SortKey): number {
+    return sortBy === 'age' ? 256 : 0x10000
   }
 
   private build(
     key: string,
     keyword: string,
     sortBy: SortKey | null,
-    order: 'asc' | 'desc',
+    order: SortOrder,
   ): Snapshot {
-    const { size, deleted, pinnedFlag } = this
+    const { rowCount, deleted } = this
     let view = this.bufferA
     let length = 0
 
     if (!keyword) {
-      for (let rowIndex = 0; rowIndex < size; rowIndex++)
-        if (!deleted[rowIndex] && !pinnedFlag[rowIndex])
-          view[length++] = rowIndex
+      for (let rowIndex = 0; rowIndex < rowCount; rowIndex++)
+        if (!deleted[rowIndex]) view[length++] = rowIndex
     } else {
       // 先在「字典」上比對關鍵字（每欄只有幾十到幾千種值），再用查表掃 1,000 萬列
       const matchTable = (values: string[]) =>
@@ -442,8 +522,8 @@ export class UserDb {
       )
       const dayHit = this.dayHitTable(keyword)
       const { nameIds, positionIds, locationIds, ages, startDays } = this
-      for (let rowIndex = 0; rowIndex < size; rowIndex++) {
-        if (deleted[rowIndex] || pinnedFlag[rowIndex]) continue
+      for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+        if (deleted[rowIndex]) continue
         if (
           nameHit[nameIds[rowIndex]] ||
           positionHit[positionIds[rowIndex]] ||
@@ -455,21 +535,53 @@ export class UserDb {
       }
     }
 
-    if (sortBy) view = this.countingSort(view, length, sortBy, order)
+    let codes: Uint32Array | null = null
+    let rank: Uint32Array | null = null
+    if (sortBy) {
+      const sorted = this.countingSort(view, length, sortBy, order)
+      view = sorted.view
+      rank = sorted.rank
+      const column = this.column(sortBy)
+      codes = this.codeBuffer ??= new Uint32Array(this.bufferA.length)
+      for (let position = 0; position < length; position++)
+        codes[position] = column[view[position]]
+    }
+    return {
+      key,
+      keyword,
+      sortBy,
+      order,
+      view,
+      codes,
+      rank,
+      length,
+      builtRowCount: rowCount,
+      removed: 0,
+    }
+  }
 
-    const pins = this.listPins().filter(
-      (pin) => !keyword || this.matches(pin.id - 1, keyword),
-    )
-    return { key, keyword, view, length, pins }
+  private column(sortBy: SortKey): ArrayLike<number> {
+    switch (sortBy) {
+      case 'userName':
+        return this.nameIds
+      case 'position':
+        return this.positionIds
+      case 'location':
+        return this.locationIds
+      case 'age':
+        return this.ages
+      case 'dateStart':
+        return this.startDays
+    }
   }
 
   private dayHitTable(keyword: string): Uint8Array {
     const table = new Uint8Array(0x10000)
     if (!/^[\d-]+$/.test(keyword)) return table
-    const { startDays, size } = this
+    const { startDays, rowCount } = this
     // 只算實際出現過的日期，避免格式化 65,536 個字串
     const seen = new Uint8Array(0x10000)
-    for (let rowIndex = 0; rowIndex < size; rowIndex++)
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex++)
       seen[startDays[rowIndex]] = 1
     for (let day = 0; day < 0x10000; day++)
       if (seen[day] && dayToDateString(day).includes(keyword)) table[day] = 1
@@ -477,14 +589,7 @@ export class UserDb {
   }
 
   private matches(rowIndex: number, keyword: string): boolean {
-    const user = this.toUser(rowIndex)
-    return [
-      user.userName,
-      user.position,
-      user.location,
-      String(user.age),
-      user.dateStart,
-    ].some((value) => value.toLowerCase().includes(keyword))
+    return matchesKeyword(this.toUser(rowIndex), keyword)
   }
 
   /** 計數排序：穩定排序，同值時保持 id 由小到大 */
@@ -492,54 +597,31 @@ export class UserDb {
     source: Uint32Array,
     length: number,
     sortBy: SortKey,
-    order: 'asc' | 'desc',
-  ): Uint32Array {
-    let column: ArrayLike<number>
-    let rank: ArrayLike<number> | null = null
+    order: SortOrder,
+  ): { view: Uint32Array; rank: Uint32Array | null } {
+    const column = this.column(sortBy)
+    let rank: Uint32Array | null = null
     let buckets: number
-    switch (sortBy) {
-      case 'userName':
-        column = this.nameIds
-        rank = this.names.rank()
-        buckets = this.names.values.length
-        break
-      case 'position':
-        column = this.positionIds
-        rank = this.positions.rank()
-        buckets = this.positions.values.length
-        break
-      case 'location':
-        column = this.locationIds
-        rank = this.locations.rank()
-        buckets = this.locations.values.length
-        break
-      case 'age':
-        column = this.ages
-        buckets = 256
-        break
-      case 'dateStart':
-        column = this.startDays
-        buckets = 0x10000
-        break
+    if (sortBy === 'userName') rank = this.names.rank()
+    else if (sortBy === 'position') rank = this.positions.rank()
+    else if (sortBy === 'location') rank = this.locations.rank()
+    if (rank) buckets = rank.length
+    else buckets = this.buckets(sortBy)
+    const keyOf = (rowIndex: number) => {
+      const value = rank ? rank[column[rowIndex]] : column[rowIndex]
+      return order === 'asc' ? value : buckets - 1 - value
     }
-    const keyOf = rank
-      ? (rowIndex: number) =>
-          order === 'asc'
-            ? rank[column[rowIndex]]
-            : buckets - 1 - rank[column[rowIndex]]
-      : (rowIndex: number) =>
-          order === 'asc' ? column[rowIndex] : buckets - 1 - column[rowIndex]
     const counts = new Uint32Array(buckets + 1)
     for (let position = 0; position < length; position++)
       counts[keyOf(source[position]) + 1]++
     for (let bucket = 0; bucket < buckets; bucket++)
       counts[bucket + 1] += counts[bucket]
-    const sorted = (this.bufferB ??= new Uint32Array(this.size))
+    const sorted = (this.bufferB ??= new Uint32Array(this.bufferA.length))
     for (let position = 0; position < length; position++)
       sorted[counts[keyOf(source[position])]++] = source[position]
     // 交換兩個緩衝區，下次查詢重複使用，不必再配置 40MB
     this.bufferB = source
     this.bufferA = sorted
-    return sorted
+    return { view: sorted, rank }
   }
 }

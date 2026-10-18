@@ -9,7 +9,8 @@ const browser = await chromium.launch({
     process.env.CHROMIUM ??
     '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
 })
-const page = await browser.newPage({ viewport: { width: 1360, height: 820 } })
+// 題目要求的桌機尺寸
+const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message))
 page.on('console', (m) => {
@@ -53,7 +54,8 @@ const waitIdle = () =>
   )
 
 const t0 = Date.now()
-await page.goto(BASE)
+// 主要流程關閉 mock 限流，避免快速排序時被 429 打斷；429 另外測
+await page.goto(`${BASE}?rateLimit=0`)
 await page.waitForSelector('.body .row', { timeout: 60_000 })
 await waitIdle()
 assert.equal(await total(), 10_000_000)
@@ -139,7 +141,13 @@ const sortBy = async (label) => {
   await waitIdle()
   await page.waitForTimeout(100)
 }
-await sortBy('Age')
+// 換條件時先保留舊資料（變淡），新的第一批回來才換掉
+await page.click('.sort:has-text("Age")')
+await page.waitForSelector('.scroller.stale')
+assert.ok((await rowsData()).length > 0, '等待期間畫面上仍有舊資料')
+await waitIdle()
+await page.waitForSelector('.scroller:not(.stale)')
+step('換排序時保留舊資料並變淡，新資料回來才換掉，不會閃成空白')
 let r = await rowsData()
 assert.ok(
   r.every((x, i) => i === 0 || r[i - 1].age <= x.age) && r[0].age === 20,
@@ -222,7 +230,14 @@ await page.waitForFunction(
 )
 await waitIdle()
 
-// 取消過期請求：連續快速點表頭，前面的請求應該被取消
+// 取消過期請求：連續快速點表頭，前面的請求應該被取消。
+// 剛才查過的條件有快取，所以換一個新的搜尋條件來測
+await page.fill('.search', 'tai')
+await page.waitForFunction(
+  () =>
+    document.querySelector('[data-testid=total]').textContent !== '10,000,000',
+)
+await waitIdle()
 const abortedBefore = Number(await page.textContent('[data-testid=aborted]'))
 await page.click('.sort:has-text("Location")')
 await page.click('.sort:has-text("Location")')
@@ -235,10 +250,10 @@ assert.ok(
   `aborted ${abortedBefore} -> ${abortedAfter}`,
 )
 r = await rowsData()
-assert.deepEqual(
-  r.slice(0, 5).map((x) => x.id),
-  [1, 2, 3, 4, 5],
-) // 取消排序後回到 id 順序
+assert.ok(
+  r.slice(0, 20).every((x, i, a) => i === 0 || a[i - 1].id < x.id),
+  '取消排序後回到 id 順序',
+)
 assert.equal(
   await page.getAttribute('.row.head [aria-sort="none"] >> nth=2', 'aria-sort'),
   'none',
@@ -246,18 +261,34 @@ assert.equal(
 step(
   `快速連點 Location 三次：取消了 ${abortedAfter - abortedBefore} 個過期請求，畫面停在最後一次（取消排序）的結果`,
 )
+await page.fill('.search', '')
+await page.waitForFunction(
+  () =>
+    document.querySelector('[data-testid=total]').textContent === '10,000,000',
+)
+await waitIdle()
 
 // 釘選
 r = await rowsData()
 const target = r[12]
+const abortedBeforePin = await page.textContent('[data-testid=aborted]')
+await page.$eval('.scroller', (el) => (el.scrollTop = 4 * 44))
+await settle()
 await page.click(`.row[data-id="${target.id}"] >> text=釘選`)
 await page.fill('input[name=position]', '3')
 await page.click('button:has-text("釘選")>>nth=-1')
 await page.waitForSelector(`[role=status]:has-text("已把 #${target.id}")`)
-await waitIdle()
+assert.equal(
+  await page.$eval('.scroller', (el) => el.scrollTop),
+  4 * 44,
+  '釘選後捲動位置不變（不重新查詢）',
+)
+assert.equal(await page.textContent('[data-testid=aborted]'), abortedBeforePin)
+await scrollToRow(0)
 r = await rowsData()
 assert.equal(r[2].id, target.id)
 assert.match(r[2].num, /📌/)
+step('釘選在前端合併：不重新查詢，捲動位置不變')
 for (const label of ['Age', 'User name', 'Date Start']) {
   await sortBy(label)
   r = await rowsData()
@@ -375,6 +406,102 @@ assert.equal(byIndex.size, uniq.size, '沒有重複 id')
 assert.ok(!uniq.has(del.id))
 step(`刪除後再捲動載入：前 ${byIndex.size} 列 id 沒有重複，被刪的列沒有再出現`)
 
+// 新增：放在最上面並標示，總數加 1
+await scrollToRow(0)
+await page.click('.tools button:has-text("新增")')
+await page.click('dialog button:has-text("新增")')
+assert.equal(await page.textContent('dialog small.error'), '必填')
+await page.fill('input[name=userName]', 'Added Person')
+await page.fill('input[name=position]', 'Frontend Engineer')
+await page.fill('input[name=location]', 'Taipei')
+await page.fill('input[name=age]', '28')
+await page.fill('input[name=dateStart]', '2026-10-18')
+await page.click('dialog button:has-text("新增")')
+await page.waitForSelector('[role=status]:has-text("已新增資料")')
+r = await rowsData()
+assert.equal(r[0].userName, 'Added Person')
+assert.match(r[0].num, /新增/)
+assert.equal(await total(), 10_000_000)
+step(`新增資料：必填檢查；成功後放在第 1 列並標示「新增」，id ${r[0].id}`)
+await page.screenshot({ path: `${OUT}/6-added.png` })
+
+// 釘選是個人設定：重新整理頁面後仍在
+await page.reload()
+await page.waitForSelector('.body .row', { timeout: 60_000 })
+await waitIdle()
+r = await rowsData()
+assert.equal(r[2].id, target.id)
+step(`重新整理後，#${target.id} 仍釘選在第 3 列（存在 localStorage）`)
+
 assert.deepEqual(errors, [], `console errors: ${errors.join('\n')}`)
 step('瀏覽器 console 沒有錯誤')
+
+// 429：限流時自動等待後重試，畫面顯示提示
+const limited = await browser.newPage({
+  viewport: { width: 1920, height: 1080 },
+})
+await limited.goto(`${BASE}?size=5000&rateLimit=2`)
+await limited.waitForSelector('.body .row')
+await limited.click('.sort:has-text("Age")') // 第 2 次查詢
+await limited.waitForFunction(
+  () => !document.querySelector('.footer')?.textContent.includes('載入中'),
+)
+await limited.click('.sort:has-text("Age")') // 第 3 次：429
+await limited.waitForSelector('.notice:has-text("秒後自動重試")')
+await limited.waitForSelector('.notice', { state: 'detached', timeout: 15_000 })
+await limited.waitForFunction(
+  () => !document.querySelector('.footer')?.textContent.includes('載入中'),
+)
+assert.equal(await limited.$('.footer [role=alert]'), null)
+step('後端回 429：顯示「n 秒後自動重試」，等待後重試成功')
+await limited.close()
+
+// 手機 375×667
+const mobile = await browser.newPage({
+  viewport: { width: 375, height: 667 },
+  isMobile: true,
+  hasTouch: true,
+})
+mobile.on('pageerror', (e) => errors.push(e.message))
+await mobile.goto(`${BASE}?size=5000&rateLimit=0`)
+await mobile.waitForSelector('.body .row')
+const layout = await mobile.evaluate(() => ({
+  pageOverflow: document.documentElement.scrollWidth - innerWidth,
+  tableOverflow:
+    document.querySelector('.scroller').scrollWidth -
+    document.querySelector('.scroller').clientWidth,
+  rowHeight: document.querySelector('.body .row').getBoundingClientRect()
+    .height,
+  headVisible: getComputedStyle(document.querySelector('.row.head')).display,
+}))
+assert.ok(layout.pageOverflow <= 0, `頁面不應左右捲動 ${layout.pageOverflow}`)
+assert.ok(layout.tableOverflow <= 0, `列表不應左右捲動 ${layout.tableOverflow}`)
+assert.equal(layout.rowHeight, 124)
+assert.equal(layout.headVisible, 'none')
+await mobile.selectOption('.mobile-sort', 'age:desc')
+await mobile.waitForFunction(
+  () =>
+    !document.querySelector('.scroller.stale') &&
+    !document.querySelector('.footer')?.textContent.includes('載入中'),
+)
+const mobileAges = await mobile.$$eval('.body .row', (els) =>
+  [...els]
+    .sort((a, b) => a.ariaRowIndex - b.ariaRowIndex)
+    .map((el) =>
+      Number(el.querySelector('.age').textContent.replace(/\D/g, '')),
+    ),
+)
+assert.ok(mobileAges.every((age, i) => i === 0 || mobileAges[i - 1] >= age))
+await mobile.screenshot({ path: `${OUT}/7-mobile.png` })
+await mobile.click('.body .row[aria-rowindex="1"] >> text=編輯')
+const dialogBox = await mobile.$eval('dialog', (el) => {
+  const box = el.getBoundingClientRect()
+  return { left: box.left, right: box.right }
+})
+assert.ok(dialogBox.left >= 0 && dialogBox.right <= 375, '視窗在畫面內')
+await mobile.screenshot({ path: `${OUT}/8-mobile-edit.png` })
+step(
+  '手機 375×667：沒有左右捲動、卡片高度固定 124px、用選單排序 Age 降冪正確、編輯視窗在畫面內',
+)
+assert.deepEqual(errors, [], `console errors: ${errors.join('\n')}`)
 await browser.close()

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import BaseDialog from './BaseDialog.vue'
-import type { UserRow } from '../types/user'
+import type { User } from '../types/user'
 
 const props = defineProps<{
-  row: UserRow
+  row: User
   currentIndex: number
   total: number
   busy?: boolean

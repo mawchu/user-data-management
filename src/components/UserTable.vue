@@ -7,23 +7,31 @@ import {
   watch,
   watchEffect,
 } from 'vue'
-import type { SortKey, SortOrder, UserRow } from '../types/user'
+import type { SortKey, SortOrder, User } from '../types/user'
 
 const props = defineProps<{
-  rows: UserRow[]
+  rows: User[]
+  /** id -> 釘選位置 */
+  pins: ReadonlyMap<number, number>
+  /** 剛新增的資料 */
+  newIds: ReadonlySet<number>
   sortBy: SortKey | null
   order: SortOrder
   loading: boolean
   hasMore: boolean
+  /** 新條件還在載入，畫面上是舊資料 */
+  stale: boolean
+  error: string | null
   resetKey: number
 }>()
 const emit = defineEmits<{
   sort: [key: SortKey]
   loadMore: []
-  edit: [row: UserRow]
-  delete: [row: UserRow]
-  pin: [row: UserRow]
-  unpin: [row: UserRow]
+  retry: []
+  edit: [row: User]
+  delete: [row: User]
+  pin: [row: User]
+  unpin: [row: User]
 }>()
 
 const COLUMNS: { key: SortKey; label: string }[] = [
@@ -34,8 +42,11 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: 'dateStart', label: 'Date Start' },
 ]
 
-// 虛擬捲動：所有列都有固定高度，只渲染視窗內看得到的列（加上下各 OVERSCAN 列緩衝）
-const ROW_HEIGHT = 44
+// 虛擬捲動：所有列都有固定高度，只渲染視窗內看得到的列（加上下各 OVERSCAN 列緩衝）。
+// 手機（寬度 640px 以下）改成卡片，高度不同，但同一種版面內仍然固定
+const DESKTOP_ROW_HEIGHT = 44
+const MOBILE_ROW_HEIGHT = 124
+const MOBILE_QUERY = '(max-width: 640px)'
 const OVERSCAN = 8
 // 離已載入資料底部剩不到這麼多列時，就先載入下一批
 const PREFETCH_ROWS = 150
@@ -44,25 +55,30 @@ const scroller = ref<HTMLElement>()
 const scrollTop = ref(0)
 const viewportHeight = ref(600)
 const selectedId = ref<number | null>(null)
+const isMobile = ref(false)
+const ROW_HEIGHT = computed(() =>
+  isMobile.value ? MOBILE_ROW_HEIGHT : DESKTOP_ROW_HEIGHT,
+)
 
 const start = computed(() =>
-  Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN),
+  Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT.value) - OVERSCAN),
 )
 const end = computed(() =>
   Math.min(
     props.rows.length,
-    Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + OVERSCAN,
+    Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT.value) +
+      OVERSCAN,
   ),
 )
 // DOM 回收：格子數量固定（視窗放得下的列數 + 上下緩衝），第 rowIndex 列固定交給
 // 第 rowIndex % poolSize 格。往下捲 1 列時，只有捲出去的那一格搬到最下面換資料，
 // 其餘格子的內容和位置都不變，不必一直建立、刪除 DOM。
 const poolSize = computed(
-  () => Math.ceil(viewportHeight.value / ROW_HEIGHT) + OVERSCAN * 2 + 1,
+  () => Math.ceil(viewportHeight.value / ROW_HEIGHT.value) + OVERSCAN * 2 + 1,
 )
 const slots = computed(() => {
   const size = poolSize.value
-  const result: { slot: number; rowIndex: number; row: UserRow }[] = []
+  const result: { slot: number; rowIndex: number; row: User }[] = []
   for (let slot = 0; slot < size; slot++) {
     const rowIndex =
       start.value + ((((slot - start.value) % size) + size) % size)
@@ -98,18 +114,35 @@ function onScroll() {
 }
 
 let observer: ResizeObserver | undefined
+let media: MediaQueryList | undefined
+const onMediaChange = () => {
+  // 版面切換時列高改變，換算成同一列的位置，避免跳到別的地方
+  const firstRow = Math.floor(scrollTop.value / ROW_HEIGHT.value)
+  isMobile.value = media!.matches
+  if (scroller.value)
+    scroller.value.scrollTop = scrollTop.value = firstRow * ROW_HEIGHT.value
+}
 onMounted(() => {
   observer = new ResizeObserver(
     ([entry]) => (viewportHeight.value = entry.contentRect.height),
   )
   observer.observe(scroller.value!)
+  media = window.matchMedia(MOBILE_QUERY)
+  isMobile.value = media.matches
+  media.addEventListener('change', onMediaChange)
 })
-onBeforeUnmount(() => observer?.disconnect())
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  media?.removeEventListener('change', onMediaChange)
+})
 
+// 預先載入。失敗（error）或正在換條件（stale）時不觸發，避免請求失敗後一直重送
 watchEffect(() => {
   if (
     props.hasMore &&
     !props.loading &&
+    !props.error &&
+    !props.stale &&
     props.rows.length - end.value < PREFETCH_ROWS
   )
     emit('loadMore')
@@ -136,6 +169,9 @@ function ariaSort(key: SortKey) {
     role="table"
     aria-label="使用者列表"
     :aria-rowcount="rows.length"
+    :aria-busy="stale || loading"
+    :class="{ stale }"
+    :style="{ '--row-height': `${ROW_HEIGHT}px` }"
     @scroll="onScroll"
   >
     <div
@@ -187,6 +223,7 @@ function ariaSort(key: SortKey) {
     <div
       class="body"
       :style="{ height: `${rows.length * ROW_HEIGHT}px` }"
+      :inert="stale"
       @focusin="onFocusIn"
     >
       <div
@@ -194,7 +231,8 @@ function ariaSort(key: SortKey) {
         :key="slot"
         class="row"
         :class="{
-          pinned: row.pinnedAt !== null,
+          pinned: pins.has(row.id),
+          added: newIds.has(row.id),
           selected: selectedId === row.id,
         }"
         :style="{ transform: `translateY(${rowIndex * ROW_HEIGHT}px)` }"
@@ -209,10 +247,15 @@ function ariaSort(key: SortKey) {
         >
           {{ (rowIndex + 1).toLocaleString() }}
           <span
-            v-if="row.pinnedAt !== null"
+            v-if="pins.has(row.id)"
             class="pin-badge"
-            :title="`釘選在第 ${row.pinnedAt} 列`"
+            :title="`釘選在第 ${pins.get(row.id)} 列`"
             >📌</span
+          >
+          <span
+            v-if="newIds.has(row.id)"
+            class="new-badge"
+            >新增</span
           >
         </div>
         <div
@@ -222,32 +265,34 @@ function ariaSort(key: SortKey) {
           {{ row.id }}
         </div>
         <div
-          class="cell"
+          class="cell name"
           role="cell"
         >
           {{ row.userName }}
         </div>
         <div
-          class="cell"
+          class="cell position"
           role="cell"
         >
           {{ row.position }}
         </div>
         <div
-          class="cell"
+          class="cell location"
           role="cell"
         >
           {{ row.location }}
         </div>
         <div
-          class="cell"
+          class="cell age"
           role="cell"
+          data-label="Age"
         >
           {{ row.age }}
         </div>
         <div
-          class="cell"
+          class="cell date"
           role="cell"
+          data-label="Start"
         >
           {{ row.dateStart }}
         </div>
@@ -262,7 +307,7 @@ function ariaSort(key: SortKey) {
             編輯
           </button>
           <button
-            v-if="row.pinnedAt === null"
+            v-if="!pins.has(row.id)"
             class="btn small"
             @click.stop="emit('pin', row)"
           >
@@ -285,8 +330,20 @@ function ariaSort(key: SortKey) {
       </div>
     </div>
 
-    <div class="footer">
-      <template v-if="loading">載入中…</template>
+    <div
+      class="footer"
+      :class="{ 'has-error': error }"
+    >
+      <template v-if="error">
+        <span role="alert">載入失敗：{{ error }}</span>
+        <button
+          class="btn small"
+          @click="emit('retry')"
+        >
+          重試
+        </button>
+      </template>
+      <template v-else-if="loading">載入中…</template>
       <template v-else-if="!hasMore && rows.length">已經到底了</template>
       <template v-else-if="!rows.length">沒有符合的資料</template>
     </div>
@@ -301,13 +358,17 @@ function ariaSort(key: SortKey) {
   border-radius: 8px;
   background: var(--surface);
 }
+.scroller.stale .body {
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
 .row {
   display: grid;
   grid-template-columns:
-    96px 96px minmax(150px, 1.3fr) minmax(170px, 1.4fr)
+    96px 104px minmax(150px, 1.3fr) minmax(170px, 1.4fr)
     minmax(110px, 1fr) 84px 120px 236px;
-  min-width: 1090px;
-  height: 44px;
+  min-width: 1098px;
+  height: var(--row-height);
   align-items: center;
   border-bottom: 1px solid var(--border);
 }
@@ -348,6 +409,17 @@ function ariaSort(key: SortKey) {
 .pin-badge {
   margin-left: 2px;
 }
+.new-badge {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--accent);
+  color: #fff;
+}
+.row.added {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 .actions {
   display: flex;
   gap: 6px;
@@ -375,5 +447,80 @@ function ariaSort(key: SortKey) {
   padding: 12px;
   text-align: center;
   color: var(--muted);
+}
+.footer.has-error {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+  color: var(--danger);
+}
+
+/* 手機：每列改成固定高度的卡片，表頭隱藏，排序改用頁首的選單 */
+@media (max-width: 640px) {
+  .row.head {
+    display: none;
+  }
+  .body .row {
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 8px 12px 8px 0;
+    grid-template-columns: 64px 1fr auto;
+    grid-template-areas:
+      'num name id'
+      'num position date'
+      'num location age'
+      'num actions actions';
+    align-content: center;
+    row-gap: 4px;
+  }
+  .cell {
+    padding: 0 4px;
+  }
+  .num {
+    grid-area: num;
+    align-self: start;
+    padding-left: 12px;
+  }
+  .id,
+  .date,
+  .age {
+    text-align: right;
+  }
+  .id {
+    grid-area: id;
+  }
+  .id::before {
+    content: '#';
+  }
+  .name {
+    grid-area: name;
+    font-weight: 600;
+  }
+  .position {
+    grid-area: position;
+  }
+  .location {
+    grid-area: location;
+  }
+  .age {
+    grid-area: age;
+  }
+  .date {
+    grid-area: date;
+  }
+  .age::before,
+  .date::before {
+    content: attr(data-label) ' ';
+    color: var(--muted);
+  }
+  .actions {
+    grid-area: actions;
+  }
+  .new-badge {
+    display: block;
+    width: fit-content;
+    margin: 4px 0 0;
+  }
 }
 </style>

@@ -5,13 +5,22 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import EditUserDialog from './components/EditUserDialog.vue'
 import PinDialog from './components/PinDialog.vue'
 import { useUserList } from './composables/useUserList'
+import { usePinnedRows } from './composables/usePinnedRows'
 import { HttpError } from './api/http'
 import { abortedRequests } from './mock/setup'
-import type { UserInput, UserRow } from './types/user'
+import type {
+  ConflictDetails,
+  SortKey,
+  SortOrder,
+  User,
+  UserInput,
+} from './types/user'
 import type { FieldErrors } from './utils/validate'
 
 const list = useUserList()
-const { rows, total, loading, hasMore, error, query, resetKey } = list
+const { total, loading, hasMore, error, notice, stale, newIds, query } = list
+const pinned = usePinnedRows(list)
+const rows = pinned.displayRows
 
 const booting = ref(true)
 const bootMs = ref(0)
@@ -25,17 +34,14 @@ onMounted(async () => {
   await apiReady
   bootMs.value = Math.round(performance.now() - bootStart)
   booting.value = false
-  await list.reload()
+  await Promise.all([list.reload(), pinned.restore()])
 })
 
-// 搜尋防抖（debounce）：停止輸入 300ms 後才查詢，避免每打一個字就掃一次千萬筆
+// 搜尋防抖（debounce）：停止輸入 300ms 後才查詢，避免每打一個字就送一次請求
 let timer: ReturnType<typeof setTimeout> | undefined
 watch(keyword, (value) => {
   clearTimeout(timer)
-  timer = setTimeout(() => {
-    query.q = value
-    list.reload()
-  }, 300)
+  timer = setTimeout(() => list.search(value), 300)
 })
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined
@@ -45,17 +51,30 @@ function notify(message: string) {
   toastTimer = setTimeout(() => (toast.value = null), 3000)
 }
 
+const COLUMNS: { key: SortKey; label: string }[] = [
+  { key: 'userName', label: 'User name' },
+  { key: 'position', label: 'Position' },
+  { key: 'location', label: 'Location' },
+  { key: 'age', label: 'Age' },
+  { key: 'dateStart', label: 'Date Start' },
+]
+// 手機沒有表頭可以點，用選單排序
+const sortChoice = computed({
+  get: () => (query.sortBy ? `${query.sortBy}:${query.order}` : ''),
+  set: (value: string) => {
+    const [key, order] = value.split(':') as [SortKey, SortOrder]
+    list.setSort(key || null, order)
+  },
+})
+
 type Dialog =
-  | {
-      type: 'edit'
-      row: UserRow
-      draft?: UserInput
-      serverErrors?: FieldErrors
-    }
-  | { type: 'confirmUpdate'; row: UserRow; input: UserInput }
-  | { type: 'confirmDelete'; row: UserRow }
-  | { type: 'pin'; row: UserRow; index: number }
-  | { type: 'confirmUnpin'; row: UserRow }
+  | { type: 'create'; draft?: UserInput; serverErrors?: FieldErrors }
+  | { type: 'edit'; row: User; draft?: UserInput; serverErrors?: FieldErrors }
+  | { type: 'confirmUpdate'; row: User; input: UserInput }
+  | { type: 'conflict'; row: User; input: UserInput; current: User }
+  | { type: 'confirmDelete'; row: User }
+  | { type: 'pin'; row: User; index: number }
+  | { type: 'confirmUnpin'; row: User }
 
 const dialog = shallowRef<Dialog | null>(null)
 const busy = ref(false)
@@ -76,18 +95,23 @@ const FIELD_LABELS: Record<keyof UserInput, string> = {
   age: 'Age',
   dateStart: 'Date Start',
 }
+const FIELDS = Object.keys(FIELD_LABELS) as (keyof UserInput)[]
 const changes = computed(() => {
   const current = dialog.value
   if (current?.type !== 'confirmUpdate') return []
-  return (Object.keys(FIELD_LABELS) as (keyof UserInput)[])
-    .filter((field) => current.row[field] !== current.input[field])
-    .map((field) => ({
-      label: FIELD_LABELS[field],
-      from: current.row[field],
-      to: current.input[field],
-    }))
+  return FIELDS.filter(
+    (field) => current.row[field] !== current.input[field],
+  ).map((field) => ({
+    label: FIELD_LABELS[field],
+    from: current.row[field],
+    to: current.input[field],
+  }))
 })
 
+/**
+ * 執行修改並統一處理結果：成功關窗並提示；失敗把錯誤回傳給呼叫端決定下一步。
+ * 資料已被別人刪除（404）時，列表已經同步拿掉，這裡只關窗並說明。
+ */
 async function run(action: () => Promise<unknown>, done: string) {
   busy.value = true
   dialogError.value = null
@@ -96,6 +120,11 @@ async function run(action: () => Promise<unknown>, done: string) {
     close()
     notify(done)
   } catch (actionError) {
+    if (actionError instanceof HttpError && actionError.status === 404) {
+      close()
+      notify('這筆資料已被其他人刪除，已從列表移除')
+      return actionError
+    }
     dialogError.value = (actionError as Error).message
     return actionError
   } finally {
@@ -103,26 +132,73 @@ async function run(action: () => Promise<unknown>, done: string) {
   }
 }
 
-async function confirmUpdate(
-  pending: Extract<Dialog, { type: 'confirmUpdate' }>,
-) {
-  const updateError = await run(
-    () => list.updateRow(pending.row.id, pending.input),
-    `已更新 #${pending.row.id}`,
-  )
-  // 後端驗證失敗：回到編輯表單並標出錯誤欄位
-  if (updateError instanceof HttpError && updateError.status === 422) {
+async function submitCreate(input: UserInput) {
+  const createError = await run(() => list.createRow(input), '已新增資料')
+  if (createError instanceof HttpError && createError.status === 422)
     open({
-      type: 'edit',
-      row: pending.row,
-      draft: pending.input,
-      serverErrors: updateError.details as FieldErrors,
+      type: 'create',
+      draft: input,
+      serverErrors: createError.details as FieldErrors,
     })
-  }
 }
 
-function onPin(row: UserRow) {
+async function confirmUpdate(row: User, input: UserInput, version: number) {
+  const updateError = await run(
+    () => list.updateRow(row.id, input, version),
+    `已更新 #${row.id}`,
+  )
+  if (!(updateError instanceof HttpError)) return
+  // 後端驗證失敗：回到編輯表單並標出錯誤欄位
+  if (updateError.status === 422)
+    open({
+      type: 'edit',
+      row,
+      draft: input,
+      serverErrors: updateError.details as FieldErrors,
+    })
+  // 別人先改過：列出差異，讓使用者決定
+  if (updateError.status === 409)
+    open({
+      type: 'conflict',
+      row,
+      input,
+      current: (updateError.details as ConflictDetails).current,
+    })
+}
+
+const conflictRows = computed(() => {
+  const current = dialog.value
+  if (current?.type !== 'conflict') return []
+  return FIELDS.map((field) => ({
+    label: FIELD_LABELS[field],
+    original: current.row[field],
+    theirs: current.current[field],
+    mine: current.input[field],
+  }))
+})
+
+function onPin(row: User) {
   open({ type: 'pin', row, index: rows.value.indexOf(row) + 1 })
+}
+
+function confirmDelete(row: User) {
+  return run(() => list.removeRow(row.id), `已刪除 #${row.id}`)
+}
+
+function confirmUnpin(row: User) {
+  pinned.unpin(row.id)
+  close()
+  notify(`已取消釘選 #${row.id}`)
+}
+
+function submitPin(row: User, position: number) {
+  try {
+    pinned.pin(row, position)
+    close()
+    notify(`已把 #${row.id} 釘選在第 ${position} 列`)
+  } catch (pinError) {
+    dialogError.value = (pinError as Error).message
+  }
 }
 </script>
 
@@ -136,7 +212,9 @@ function onPin(row: UserRow) {
           <template v-else>
             共
             <b data-testid="total">{{ total.toLocaleString() }}</b> 筆，已載入
-            <span data-testid="loaded">{{ rows.length.toLocaleString() }}</span>
+            <span data-testid="loaded">{{
+              list.rows.value.length.toLocaleString()
+            }}</span>
             筆
             <span class="hint">
               （資料產生 {{ bootMs }}ms，每次捲動載入 500 筆，已取消
@@ -146,35 +224,64 @@ function onPin(row: UserRow) {
           </template>
         </p>
       </div>
-      <input
-        v-model="keyword"
-        class="search"
-        type="search"
-        placeholder="搜尋所有欄位，例如 Chen、Engineer、42、2015-03"
-        aria-label="搜尋所有欄位"
-        :disabled="booting"
-      />
+      <div class="tools">
+        <input
+          v-model="keyword"
+          class="search"
+          type="search"
+          placeholder="搜尋所有欄位，例如 Chen、Engineer、42、2015-03"
+          aria-label="搜尋所有欄位"
+          :disabled="booting"
+        />
+        <select
+          v-model="sortChoice"
+          class="mobile-sort"
+          aria-label="排序"
+          :disabled="booting"
+        >
+          <option value="">不排序</option>
+          <template
+            v-for="column in COLUMNS"
+            :key="column.key"
+          >
+            <option :value="`${column.key}:asc`">{{ column.label }} ↑</option>
+            <option :value="`${column.key}:desc`">{{ column.label }} ↓</option>
+          </template>
+        </select>
+        <button
+          class="btn primary"
+          :disabled="booting"
+          @click="open({ type: 'create' })"
+        >
+          新增
+        </button>
+      </div>
     </header>
 
     <p
-      v-if="error"
-      class="error"
-      role="alert"
+      v-if="notice"
+      class="notice"
+      role="status"
     >
-      {{ error }}
+      {{ notice }}
     </p>
 
     <main class="main">
       <UserTable
         v-if="!booting"
         :rows="rows"
+        :pins="pinned.pins.value"
+        :new-ids="newIds"
         :sort-by="query.sortBy"
         :order="query.order"
         :loading="loading"
         :has-more="hasMore"
-        :reset-key="resetKey"
+        :stale="stale"
+        :error="error"
+        :reset-key="list.resetKey.value"
         @sort="list.toggleSort"
         @load-more="list.loadMore"
+        @retry="list.retry"
         @edit="(row) => open({ type: 'edit', row })"
         @delete="(row) => open({ type: 'confirmDelete', row })"
         @pin="onPin"
@@ -189,15 +296,28 @@ function onPin(row: UserRow) {
     </main>
 
     <EditUserDialog
-      v-if="dialog?.type === 'edit'"
+      v-if="dialog?.type === 'create'"
+      title="新增使用者"
+      submit-text="新增"
+      :initial="dialog.draft"
+      :server-errors="dialog.serverErrors"
+      :busy="busy"
+      :error="dialogError"
+      @cancel="close"
+      @submit="submitCreate"
+    />
+
+    <EditUserDialog
+      v-else-if="dialog?.type === 'edit'"
       :key="`edit-${dialog.row.id}`"
-      :row="dialog.row"
-      :draft="dialog.draft"
+      :title="`編輯使用者 #${dialog.row.id}`"
+      :initial="dialog.draft ?? dialog.row"
       :server-errors="dialog.serverErrors"
       @cancel="close"
       @submit="
         (input) =>
-          dialog && open({ type: 'confirmUpdate', row: dialog.row, input })
+          dialog?.type === 'edit' &&
+          open({ type: 'confirmUpdate', row: dialog.row, input })
       "
     />
 
@@ -208,7 +328,7 @@ function onPin(row: UserRow) {
       :busy="busy"
       :error="dialogError"
       @cancel="open({ type: 'edit', row: dialog.row, draft: dialog.input })"
-      @confirm="confirmUpdate(dialog)"
+      @confirm="confirmUpdate(dialog.row, dialog.input, dialog.row.version)"
     >
       <p>#{{ dialog.row.id }} {{ dialog.row.userName }}</p>
       <table
@@ -242,6 +362,58 @@ function onPin(row: UserRow) {
     </ConfirmDialog>
 
     <ConfirmDialog
+      v-else-if="dialog?.type === 'conflict'"
+      title="這筆資料剛被其他人修改"
+      confirm-text="用我的版本覆蓋"
+      cancel-text="放棄我的修改"
+      danger
+      :busy="busy"
+      :error="dialogError"
+      @cancel="close"
+      @confirm="
+        confirmUpdate(dialog.current, dialog.input, dialog.current.version)
+      "
+    >
+      <p>
+        #{{ dialog.row.id }}
+        在你編輯期間已被更新。列表已換成最新內容，你可以放棄修改，或用你的版本覆蓋。
+      </p>
+      <table class="diff">
+        <thead>
+          <tr>
+            <th>欄位</th>
+            <th>其他人改成</th>
+            <th>你要改成</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="c in conflictRows"
+            :key="c.label"
+            :class="{ differs: c.theirs !== c.mine }"
+          >
+            <td>{{ c.label }}</td>
+            <td>{{ c.theirs }}</td>
+            <td class="to">{{ c.mine }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <template #extra>
+        <button
+          class="btn"
+          type="button"
+          :disabled="busy"
+          @click="
+            dialog?.type === 'conflict' &&
+            open({ type: 'edit', row: dialog.current, draft: dialog.input })
+          "
+        >
+          重新編輯
+        </button>
+      </template>
+    </ConfirmDialog>
+
+    <ConfirmDialog
       v-else-if="dialog?.type === 'confirmDelete'"
       title="確定要刪除這筆資料嗎？"
       confirm-text="確定刪除"
@@ -249,9 +421,7 @@ function onPin(row: UserRow) {
       :busy="busy"
       :error="dialogError"
       @cancel="close"
-      @confirm="
-        run(() => list.removeRow(dialog!.row.id), `已刪除 #${dialog!.row.id}`)
-      "
+      @confirm="confirmDelete(dialog.row)"
     >
       <p>
         <b>#{{ dialog.row.id }} {{ dialog.row.userName }}</b
@@ -265,15 +435,10 @@ function onPin(row: UserRow) {
       :row="dialog.row"
       :current-index="dialog.index"
       :total="total"
-      :busy="busy"
       :error="dialogError"
       @cancel="close"
       @submit="
-        (position) =>
-          run(
-            () => list.pinRow(dialog!.row.id, position),
-            `已把 #${dialog!.row.id} 釘選在第 ${position} 列`,
-          )
+        (position) => dialog?.type === 'pin' && submitPin(dialog.row, position)
       "
     />
 
@@ -281,19 +446,13 @@ function onPin(row: UserRow) {
       v-else-if="dialog?.type === 'confirmUnpin'"
       title="取消釘選？"
       confirm-text="取消釘選"
-      :busy="busy"
-      :error="dialogError"
       @cancel="close"
-      @confirm="
-        run(
-          () => list.unpinRow(dialog!.row.id),
-          `已取消釘選 #${dialog!.row.id}`,
-        )
-      "
+      @confirm="confirmUnpin(dialog.row)"
     >
       <p>
         #{{ dialog.row.id }} {{ dialog.row.userName }} 目前釘選在第
-        {{ dialog.row.pinnedAt }} 列，取消後會回到依排序規則的位置。
+        {{ pinned.pins.value.get(dialog.row.id) }}
+        列，取消後會回到依排序規則的位置。
       </p>
     </ConfirmDialog>
 
@@ -336,14 +495,38 @@ h1 {
 .meta b {
   color: var(--text);
 }
+.tools {
+  display: flex;
+  gap: 8px;
+  width: min(520px, 100%);
+}
 .search {
   font: inherit;
-  width: min(420px, 100%);
+  flex: 1;
+  min-width: 0;
   padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   color: var(--text);
+}
+.mobile-sort {
+  display: none;
+  font: inherit;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+.notice {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--pinned);
+}
+.diff tr.differs td {
+  font-weight: 600;
 }
 .main {
   flex: 1;
@@ -383,6 +566,13 @@ h1 {
   border-radius: 8px;
 }
 @media (max-width: 640px) {
+  .mobile-sort {
+    display: block;
+    max-width: 120px;
+  }
+  .meta .hint {
+    display: none;
+  }
   .layout {
     padding-block: 12px;
     padding-left: max(16px, env(safe-area-inset-left, 0px));

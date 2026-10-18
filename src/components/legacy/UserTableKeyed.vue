@@ -9,10 +9,11 @@ import {
   watch,
   watchEffect,
 } from 'vue'
-import type { SortKey, SortOrder, UserRow } from '../../types/user'
+import type { SortKey, SortOrder, User } from '../../types/user'
 
 const props = defineProps<{
-  rows: UserRow[]
+  rows: User[]
+  pins?: ReadonlyMap<number, number>
   sortBy: SortKey | null
   order: SortOrder
   loading: boolean
@@ -22,10 +23,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   sort: [key: SortKey]
   loadMore: []
-  edit: [row: UserRow]
-  delete: [row: UserRow]
-  pin: [row: UserRow]
-  unpin: [row: UserRow]
+  edit: [row: User]
+  delete: [row: User]
+  pin: [row: User]
+  unpin: [row: User]
 }>()
 
 const COLUMNS: { key: SortKey; label: string }[] = [
@@ -166,7 +167,7 @@ function ariaSort(key: SortKey) {
           :key="row.id"
           class="row"
           :class="{
-            pinned: row.pinnedAt !== null,
+            pinned: pins?.has(row.id),
             selected: selectedId === row.id,
           }"
           role="row"
@@ -180,9 +181,9 @@ function ariaSort(key: SortKey) {
           >
             {{ (start + offset + 1).toLocaleString() }}
             <span
-              v-if="row.pinnedAt !== null"
+              v-if="pins?.has(row.id)"
               class="pin-badge"
-              :title="`釘選在第 ${row.pinnedAt} 列`"
+              :title="`釘選在第 ${pins?.get(row.id)} 列`"
               >📌</span
             >
           </div>
@@ -233,7 +234,7 @@ function ariaSort(key: SortKey) {
               編輯
             </button>
             <button
-              v-if="row.pinnedAt === null"
+              v-if="!pins?.has(row.id)"
               class="btn small"
               @click.stop="emit('pin', row)"
             >

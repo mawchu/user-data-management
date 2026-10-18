@@ -13,7 +13,7 @@ const time = <T>(label: string, fn: () => T): T => {
 }
 
 describe.skipIf(!process.env.PERF)('10,000,000 筆效能', () => {
-  it('產生、查詢、排序、搜尋、釘選', () => {
+  it('產生、查詢、排序、搜尋、刪除', () => {
     const db = time('產生 10,000,000 筆', () => new UserDb())
     const first = time('第一批（無排序）', () => db.list())
     expect(first.total).toBe(10_000_000)
@@ -31,14 +31,10 @@ describe.skipIf(!process.env.PERF)('10,000,000 筆效能', () => {
       const r = time(`搜尋 "${q}"`, () => db.list({ q, sortBy: 'age' }))
       console.log(`  → 符合 ${r.total.toLocaleString()} 筆`)
     }
-    db.pin(9_999_999, 1)
-    const pinned = time('釘選後重新查詢（排序 age）', () =>
-      db.list({ sortBy: 'age' }),
-    )
-    expect(pinned.data[0].id).toBe(9_999_999)
-    time('刪除一筆（含更新快照）', () => db.remove(pinned.data[5].id))
-    time('最後一批', () =>
-      db.list({ sortBy: 'age', cursor: String(db.count - 100) }),
+    const sorted = time('排序 age（第一批）', () => db.list({ sortBy: 'age' }))
+    time('刪除一筆', () => db.remove(sorted.data[5].id))
+    time('下一批（keyset 二分搜尋）', () =>
+      db.list({ sortBy: 'age', cursor: sorted.nextCursor }),
     )
     console.log(
       `記憶體 heapUsed+arrayBuffers ≈ ${((process.memoryUsage().heapUsed + process.memoryUsage().arrayBuffers) / 1e6).toFixed(0)} MB`,

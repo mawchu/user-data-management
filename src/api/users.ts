@@ -1,17 +1,17 @@
 /**
- * 使用者 API：
+ * 使用者 API（完整契約見 docs/api.md）：
  *   GET    /api/users?q=&sortBy=&order=&cursor=&limit=500
- *   PATCH  /api/users/:id
+ *   GET    /api/users/:id
+ *   POST   /api/users
+ *   PATCH  /api/users/:id   { ...欄位, version }
  *   DELETE /api/users/:id
- *   PUT    /api/users/:id/pin   { position }
- *   DELETE /api/users/:id/pin
  */
 import { request } from './http'
 import type {
+  User,
   UserInput,
   UserListQuery,
   UserListResponse,
-  UserRow,
 } from '../types/user'
 
 function toSearchParams(query: UserListQuery) {
@@ -32,11 +32,15 @@ export const usersApi = {
     request<UserListResponse>('GET', `/api/users?${toSearchParams(query)}`, {
       signal,
     }),
+  get: (id: number, signal?: AbortSignal) =>
+    request<User>('GET', `/api/users/${id}`, { signal }),
   // 修改類請求刻意不提供取消：請求一旦送出，後端可能已經改好了，前端取消只會讓畫面和資料不一致
-  update: (id: number, input: UserInput) =>
-    request<UserRow>('PATCH', `/api/users/${id}`, { body: input }),
+  create: (input: UserInput) =>
+    request<User>('POST', '/api/users', { body: input }),
+  /** 帶上讀到的 version：別人先改過時後端回 409 */
+  update: (id: number, input: UserInput, version: number) =>
+    request<User>('PATCH', `/api/users/${id}`, {
+      body: { ...input, version },
+    }),
   remove: (id: number) => request<void>('DELETE', `/api/users/${id}`),
-  pin: (id: number, position: number) =>
-    request<UserRow>('PUT', `/api/users/${id}/pin`, { body: { position } }),
-  unpin: (id: number) => request<UserRow>('DELETE', `/api/users/${id}/pin`),
 }

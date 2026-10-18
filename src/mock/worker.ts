@@ -5,10 +5,10 @@ import { ApiError, UserDb } from './db'
 export type MockRequest =
   | { method: 'init'; args: [size: number] }
   | { method: 'list'; args: Parameters<UserDb['list']> }
+  | { method: 'get'; args: Parameters<UserDb['get']> }
+  | { method: 'create'; args: Parameters<UserDb['create']> }
   | { method: 'update'; args: Parameters<UserDb['update']> }
   | { method: 'remove'; args: Parameters<UserDb['remove']> }
-  | { method: 'pin'; args: Parameters<UserDb['pin']> }
-  | { method: 'unpin'; args: Parameters<UserDb['unpin']> }
 
 export type MockResponse =
   | { id: number; ok: true; result: unknown }

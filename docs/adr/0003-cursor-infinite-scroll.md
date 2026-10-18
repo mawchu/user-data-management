@@ -1,6 +1,6 @@
 # 0003 cursor 分頁，每批 500 筆，無限捲動
 
-- 狀態：採用（取代 [0002](0002-page-based-pagination.md)）
+- 狀態：cursor 的實作方式被 [0013](0013-keyset-cursor.md) 取代；每批 500 筆與無限捲動仍採用（取代 [0002](0002-page-based-pagination.md)）
 - 階段：2 載入方式
 
 ## 背景

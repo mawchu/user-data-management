@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import BaseDialog from './BaseDialog.vue'
-import type { UserInput, UserRow } from '../types/user'
+import type { UserInput } from '../types/user'
 import {
   AGE_MAX,
   AGE_MIN,
@@ -12,15 +12,34 @@ import {
 } from '../utils/validate'
 
 const props = defineProps<{
-  row: UserRow
-  draft?: UserInput
+  title: string
+  /** 表單的初始值；新增時不帶 */
+  initial?: UserInput
   serverErrors?: FieldErrors
+  submitText?: string
+  busy?: boolean
+  error?: string | null
 }>()
 const emit = defineEmits<{ submit: [input: UserInput]; cancel: [] }>()
 
+const EMPTY: Record<keyof UserInput, string | number> = {
+  userName: '',
+  position: '',
+  location: '',
+  age: '',
+  dateStart: '',
+}
 const form = reactive<Record<keyof UserInput, string | number>>({
-  ...(props.draft ?? props.row),
+  ...EMPTY,
+  ...pick(props.initial),
 })
+
+// 只取表單的 5 個欄位（傳進來的可能是含 id、version 的整筆資料）
+function pick(input?: UserInput) {
+  if (!input) return {}
+  const { userName, position, location, age, dateStart } = input
+  return { userName, position, location, age, dateStart }
+}
 const errors = ref<FieldErrors>(props.serverErrors ?? {})
 
 const FIELDS = [
@@ -47,8 +66,8 @@ function submit() {
 
 <template>
   <BaseDialog
-    :title="`編輯使用者 #${row.id}`"
-    @close="emit('cancel')"
+    :title="title"
+    @close="!busy && emit('cancel')"
   >
     <form
       id="edit-user-form"
@@ -90,10 +109,18 @@ function submit() {
         >
       </label>
     </form>
+    <p
+      v-if="error"
+      class="error"
+      role="alert"
+    >
+      {{ error }}
+    </p>
     <template #buttons>
       <button
         class="btn"
         type="button"
+        :disabled="busy"
         @click="emit('cancel')"
       >
         取消
@@ -102,8 +129,9 @@ function submit() {
         class="btn primary"
         type="submit"
         form="edit-user-form"
+        :disabled="busy"
       >
-        下一步
+        {{ busy ? '處理中…' : (submitText ?? '下一步') }}
       </button>
     </template>
   </BaseDialog>

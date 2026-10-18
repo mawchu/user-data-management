@@ -12,6 +12,8 @@ export interface MockFetchOptions {
   latency?: [number, number]
   /** 每次請求被取消時呼叫，方便畫面顯示統計 */
   onAbort?: (method: string, url: string) => void
+  /** 模擬後端限流：查詢在 windowMs 內超過 limit 次就回 429 */
+  rateLimit?: { limit: number; windowMs: number }
 }
 
 type Route = {
@@ -47,31 +49,29 @@ const ROUTES: Route[] = [
     },
   },
   {
+    method: 'POST',
+    pattern: /^\/api\/users$/,
+    toRequest: (_match, _url, body) => ({ method: 'create', args: [body] }),
+    status: 201,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/users\/(\d+)$/,
+    toRequest: (match) => ({ method: 'get', args: [Number(match[1])] }),
+  },
+  {
     method: 'PATCH',
     pattern: /^\/api\/users\/(\d+)$/,
-    toRequest: (match, _url, body) => ({
-      method: 'update',
-      args: [Number(match[1]), body],
-    }),
+    toRequest: (match, _url, body) => {
+      const { version, ...input } = body ?? {}
+      return { method: 'update', args: [Number(match[1]), input, version] }
+    },
   },
   {
     method: 'DELETE',
     pattern: /^\/api\/users\/(\d+)$/,
     toRequest: (match) => ({ method: 'remove', args: [Number(match[1])] }),
     status: 204,
-  },
-  {
-    method: 'PUT',
-    pattern: /^\/api\/users\/(\d+)\/pin$/,
-    toRequest: (match, _url, body) => ({
-      method: 'pin',
-      args: [Number(match[1]), Number(body?.position)],
-    }),
-  },
-  {
-    method: 'DELETE',
-    pattern: /^\/api\/users\/(\d+)\/pin$/,
-    toRequest: (match) => ({ method: 'unpin', args: [Number(match[1])] }),
   },
 ]
 
@@ -110,10 +110,14 @@ function raceAbort<T>(
   })
 }
 
-const json = (status: number, data: unknown) =>
+const json = (
+  status: number,
+  data: unknown,
+  headers: Record<string, string> = {},
+) =>
   new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
   })
 
 export function createMockFetch(
@@ -121,6 +125,7 @@ export function createMockFetch(
   options: MockFetchOptions = {},
 ) {
   const [minMs, maxMs] = options.latency ?? [0, 0]
+  const listRequestTimes: number[] = []
 
   return async function mockFetch(
     input: string,
@@ -132,6 +137,28 @@ export function createMockFetch(
     try {
       // 1. 模擬「請求在網路上傳送」：這段時間內取消，後端完全不會收到
       await sleep(minMs + Math.random() * (maxMs - minMs), signal)
+
+      if (
+        options.rateLimit &&
+        method === 'GET' &&
+        url.pathname === '/api/users'
+      ) {
+        const { limit, windowMs } = options.rateLimit
+        const now = Date.now()
+        while (listRequestTimes.length && now - listRequestTimes[0] >= windowMs)
+          listRequestTimes.shift()
+        if (listRequestTimes.length >= limit) {
+          const retryAfter = Math.ceil(
+            (windowMs - (now - listRequestTimes[0])) / 1000,
+          )
+          return json(
+            429,
+            { message: '查詢太頻繁，請稍後再試' },
+            { 'Retry-After': String(retryAfter) },
+          )
+        }
+        listRequestTimes.push(now)
+      }
 
       const route = ROUTES.find(
         (candidate) =>
@@ -153,7 +180,7 @@ export function createMockFetch(
       const result = await raceAbort(backend.call(request), signal)
       return route.status === 204
         ? new Response(null, { status: 204 })
-        : json(200, result)
+        : json(route.status ?? 200, result)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         options.onAbort?.(method, input)

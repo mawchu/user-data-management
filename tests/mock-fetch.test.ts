@@ -22,13 +22,19 @@ describe('mock fetch + API 層', () => {
       q: 'chen',
       sortBy: 'age',
       order: 'desc',
-      cursor: '500',
+      cursor: '30.12',
       limit: 500,
     })
     expect(spy).toHaveBeenCalledWith({
       method: 'list',
       args: [
-        { q: 'chen', sortBy: 'age', order: 'desc', cursor: '500', limit: 500 },
+        {
+          q: 'chen',
+          sortBy: 'age',
+          order: 'desc',
+          cursor: '30.12',
+          limit: 500,
+        },
       ],
     })
     expect(res.data.length).toBeLessThanOrEqual(500)
@@ -37,34 +43,67 @@ describe('mock fetch + API 層', () => {
     )
   })
 
-  it('回傳的是真正的 Response：狀態碼、JSON、204', async () => {
+  it('回傳的是真正的 Response：狀態碼、JSON、201、204', async () => {
     const { mockFetch } = setup()
     const ok = await mockFetch('/api/users?limit=3')
     expect(ok.status).toBe(200)
     expect(ok.headers.get('Content-Type')).toBe('application/json')
     expect((await ok.json()).data).toHaveLength(3)
+    const created = await mockFetch('/api/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        userName: 'New One',
+        position: 'QA',
+        location: 'Taipei',
+        age: 30,
+        dateStart: '2026-01-02',
+      }),
+    })
+    expect(created.status).toBe(201)
+    expect(await created.json()).toMatchObject({ id: 2001, version: 1 })
+    expect((await mockFetch('/api/users/2001')).status).toBe(200)
     const del = await mockFetch('/api/users/5', { method: 'DELETE' })
     expect(del.status).toBe(204)
     expect((await mockFetch('/api/nope')).status).toBe(404)
   })
 
-  it('錯誤轉成 HttpError：422 帶欄位錯誤、404、409', async () => {
-    setup()
-    await expect(
-      usersApi.update(1, {
-        userName: '',
-        position: 'a',
-        location: 'b',
-        age: 1.5,
-        dateStart: 'x',
+  it('限流：超過次數回 429 並帶 Retry-After，HttpError 會讀出秒數', async () => {
+    setTransport(
+      createMockFetch(createDirectBackend(new UserDb(100)), {
+        rateLimit: { limit: 2, windowMs: 3000 },
       }),
+    )
+    await usersApi.list({})
+    await usersApi.list({})
+    await expect(usersApi.list({})).rejects.toMatchObject({
+      status: 429,
+      retryAfter: 3,
+    })
+    // 只限制查詢，修改不受影響
+    await expect(usersApi.get(1)).resolves.toMatchObject({ id: 1 })
+  })
+
+  it('錯誤轉成 HttpError：422 帶欄位錯誤、404、409 帶目前資料', async () => {
+    setup()
+    const input = {
+      userName: 'A',
+      position: 'B',
+      location: 'C',
+      age: 30,
+      dateStart: '2020-01-01',
+    }
+    await expect(
+      usersApi.update(1, { ...input, userName: '', age: 1.5 }, 1),
     ).rejects.toMatchObject({
       status: 422,
       details: { userName: '必填', age: '請輸入整數' },
     })
     await expect(usersApi.remove(999999)).rejects.toBeInstanceOf(HttpError)
-    await usersApi.pin(1, 2)
-    await expect(usersApi.pin(3, 2)).rejects.toMatchObject({ status: 409 })
+    await usersApi.update(1, input, 1)
+    await expect(usersApi.update(1, input, 1)).rejects.toMatchObject({
+      status: 409,
+      details: { current: { id: 1, version: 2 } },
+    })
   })
 
   it('網路延遲中取消：請求不會送到後端', async () => {

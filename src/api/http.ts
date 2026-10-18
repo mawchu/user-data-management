@@ -4,6 +4,8 @@ export class HttpError extends Error {
     public status: number,
     message: string,
     public details?: unknown,
+    /** 429 時後端建議等待的秒數（Retry-After 標頭） */
+    public retryAfter?: number,
   ) {
     super(message)
   }
@@ -37,11 +39,14 @@ export async function request<T>(
   })
   if (response.status === 204) return undefined as T
   const data = await response.json().catch(() => null)
-  if (!response.ok)
+  if (!response.ok) {
+    const retryAfter = Number(response.headers.get('Retry-After'))
     throw new HttpError(
       response.status,
       data?.message ?? `HTTP ${response.status}`,
       data?.details,
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
     )
+  }
   return data as T
 }

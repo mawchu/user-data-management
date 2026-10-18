@@ -4,6 +4,7 @@ import BaseDialog from './BaseDialog.vue'
 defineProps<{
   title: string
   confirmText: string
+  cancelText?: string
   danger?: boolean
   busy?: boolean
   error?: string | null
@@ -25,12 +26,13 @@ const emit = defineEmits<{ confirm: []; cancel: [] }>()
       {{ error }}
     </p>
     <template #buttons>
+      <slot name="extra" />
       <button
         class="btn"
         :disabled="busy"
         @click="emit('cancel')"
       >
-        取消
+        {{ cancelText ?? '取消' }}
       </button>
       <button
         class="btn primary"
