@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, inject, onMounted, ref, shallowRef, watch } from 'vue'
 import UserTable from './components/UserTable.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import EditUserDialog from './components/EditUserDialog.vue'
 import PinDialog from './components/PinDialog.vue'
 import { useUserList } from './composables/useUserList'
-import { HttpError, usersApi } from './api/users'
+import { HttpError } from './api/http'
+import { abortedRequests } from './mock/setup'
 import type { UserInput, UserRow } from './types/user'
 import type { FieldErrors } from './utils/validate'
 
@@ -17,9 +18,11 @@ const bootMs = ref(0)
 const keyword = ref('')
 const toast = ref<string | null>(null)
 
+const apiReady = inject<Promise<unknown>>('apiReady', Promise.resolve())
+
 onMounted(async () => {
   const t = performance.now()
-  await usersApi.ready
+  await apiReady
   bootMs.value = Math.round(performance.now() - t)
   booting.value = false
   await list.reload()
@@ -114,7 +117,10 @@ function onPin(row: UserRow) {
           <template v-else>
             共 <b data-testid="total">{{ total.toLocaleString() }}</b> 筆，已載入
             <span data-testid="loaded">{{ rows.length.toLocaleString() }}</span> 筆
-            <span class="hint">（資料產生 {{ bootMs }}ms，每次捲動載入 500 筆）</span>
+            <span class="hint">
+              （資料產生 {{ bootMs }}ms，每次捲動載入 500 筆，已取消
+              <span data-testid="aborted">{{ abortedRequests }}</span> 個過期請求）
+            </span>
           </template>
         </p>
       </div>

@@ -1,5 +1,6 @@
-import { reactive, ref, shallowRef } from 'vue'
+import { onScopeDispose, reactive, ref, shallowRef } from 'vue'
 import { usersApi } from '../api/users'
+import { isAbortError } from '../api/http'
 import type { SortKey, SortOrder, UserInput, UserRow } from '../types/user'
 
 const BATCH = 500
@@ -16,31 +17,34 @@ export function useUserList() {
   const query = reactive<{ q: string; sortBy: SortKey | null; order: SortOrder }>({ q: '', sortBy: null, order: 'asc' })
 
   let cursor: string | null = null
-  // 每次重新查詢就換一個 token，舊請求晚回來時直接丟掉，避免結果錯亂
-  let token = 0
+  // 目前進行中的查詢。換搜尋字或排序時呼叫 abort()，舊請求就不會再佔用網路，也不會晚回來蓋掉新結果
+  let controller: AbortController | null = null
 
   async function loadMore() {
     if (loading.value || !hasMore.value) return
+    const current = (controller = new AbortController())
     loading.value = true
     error.value = null
-    const t = token
     try {
-      const res = await usersApi.list({ ...query, cursor, limit: BATCH })
-      if (t !== token) return
+      const res = await usersApi.list({ ...query, cursor, limit: BATCH }, current.signal)
       // 換成新陣列（而不是 push）：子元件的 props 才會偵測到變化
       rows.value = rows.value.concat(res.data)
       total.value = res.total
       cursor = res.nextCursor
       hasMore.value = res.hasMore
     } catch (e) {
-      if (t === token) error.value = (e as Error).message
+      if (!isAbortError(e)) error.value = (e as Error).message
     } finally {
-      if (t === token) loading.value = false
+      if (controller === current) {
+        loading.value = false
+        controller = null
+      }
     }
   }
 
   function reload() {
-    token++
+    controller?.abort()
+    controller = null
     rows.value = []
     cursor = null
     hasMore.value = true
@@ -86,6 +90,9 @@ export function useUserList() {
     await usersApi.unpin(id)
     await reload()
   }
+
+  // 元件卸載時，取消還在路上的請求
+  onScopeDispose(() => controller?.abort())
 
   return { rows, total, loading, hasMore, error, query, resetKey, loadMore, reload, toggleSort, removeRow, updateRow, pinRow, unpinRow }
 }
