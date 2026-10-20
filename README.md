@@ -6,6 +6,8 @@ Vue 3 + TypeScript 實作的使用者資料管理後台。前端的重點有四�
 
 搜尋和排序要對全部資料才算正確，所以交給後端。前端負責的是怎麼發請求、怎麼收結果，以及資料衝突時怎麼處理。因為沒有真的 API，我另外寫了一個能撐一千萬筆的 mock 後端（放在 Web Worker），讓前端在接近題目的資料量下測試；前後端之間的約定寫在 [docs/api.md](docs/api.md)。接真 API 時刪掉 `main.ts` 裡的 `setupMock()` 即可。
 
+線上 demo：<https://mawchu.github.io/user-data-management/>（預設 1,000 萬筆，開啟時會先在瀏覽器裡產生資料；網址加 `?size=5000` 可以用較少資料試用）。
+
 程式碼導讀在 [docs/code-map.md](docs/code-map.md)，各項決定的考量記在 [docs/adr/](docs/adr/README.md)。
 
 ### a. 實作
