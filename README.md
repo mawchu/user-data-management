@@ -1,5 +1,19 @@
 # Q1
 
+### Vue 3 優點（Pros）
+
+1. Proxy 響應式：改善 Vue 2 新增、刪除物件屬性無法自動追蹤的限制。
+2. Composition API：相關狀態與邏輯可以集中管理，方便抽成 Composable（類似 React Hooks）。
+3. TypeScript 支援：更容易定義元件 Props、Emits 與 Composable 的型別契約。
+4. 效能優化：透過編譯器優化，減少不必要的 DOM 更新。
+
+### Vue 3 缺點（Cons）
+
+1. 響應式學習成本：`ref`、`reactive` 使用方式不同，解構可能造成響應式失效。
+2. 狀態變更難追蹤：多個 Composable 共用可變狀態時，容易不清楚誰修改了資料。
+3. Watcher 副作用：`watch`、`watchEffect` 若管理不當，容易產生重複請求、非同步競態問題。
+4. 遷移成本：Vue 2 升級 Vue 3，需要處理舊套件相容性與既有業務邏輯。
+
 # Q2. 使用者資料管理系統
 
 線上 demo：<https://mawchu.github.io/user-data-management/>（網址加 `?size=5000` 會開得比較快）。程式碼導讀在 [docs/code-map.md](docs/code-map.md)，各項決定的考量記在 [docs/adr/](docs/adr/README.md)。
