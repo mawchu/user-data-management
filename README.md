@@ -16,7 +16,7 @@
 
 # Q2. 使用者資料管理系統
 
-線上 demo：<https://mawchu.github.io/user-data-management/>（網址加 `?size=5000` 會開得比較快）。程式碼導讀在 [docs/code-map.md](docs/code-map.md)，各項決定的考量記在 [docs/adr/](docs/adr/README.md)。
+線上 demo：<https://mawchu.github.io/user-data-management/>（網址加 `?size=5000` 會開得比較快）。各項決定的考量記在 [docs/adr/](docs/adr/README.md)。
 
 ### a. 實作
 
