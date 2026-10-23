@@ -551,6 +551,11 @@ h1 {
 .mobile-sort {
   display: none;
 }
+/* 新增按鈕的邊框、圓角跟搜尋框一致，才不會看起來比較大 */
+.tools .btn {
+  border-color: var(--border);
+  border-radius: 8px;
+}
 .notice {
   margin: 0;
   padding: 8px 12px;
@@ -621,9 +626,7 @@ h1 {
   }
   .tools .btn {
     height: 44px;
-    /* 外框、圓角、底色都跟排序選單一樣，實心藍底會讓按鈕看起來比較大 */
-    border-color: var(--border);
-    border-radius: 8px;
+    /* 手機版底色也跟排序選單一樣，實心藍底會讓按鈕看起來比較大 */
     background: var(--surface);
     color: var(--accent);
     font-weight: 600;
