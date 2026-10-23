@@ -559,7 +559,8 @@ h1 {
 }
 /* 新增按鈕的邊框、圓角跟搜尋框一致，才不會看起來比較大 */
 .tools .btn {
-  width: var(--action-width);
+  /* 多 1px 讓藍底左緣跟放大鏡分割線在視覺上對齊 */
+  width: calc(var(--action-width) + 1px);
   flex: none;
   padding-inline: 0;
   border-color: var(--border);
