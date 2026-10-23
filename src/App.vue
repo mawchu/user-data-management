@@ -621,8 +621,12 @@ h1 {
   }
   .tools .btn {
     height: 44px;
-    /* 邊框跟排序選單同色，兩者看起來才一樣大 */
+    /* 外框、圓角、底色都跟排序選單一樣，實心藍底會讓按鈕看起來比較大 */
     border-color: var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--accent);
+    font-weight: 600;
   }
   .meta .hint {
     display: none;
