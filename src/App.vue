@@ -584,6 +584,17 @@ h1 {
     display: block;
     flex: 1;
     min-width: 0;
+    height: 44px;
+    /* Safari 的原生 select 不吃高度設定，改成自己畫箭頭才會跟按鈕一樣高 */
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0 36px 0 12px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2394a3b8' stroke-width='2'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+  .tools .btn {
+    height: 44px;
   }
   .meta .hint {
     display: none;
