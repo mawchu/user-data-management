@@ -233,14 +233,37 @@ function submitPin(row: User, position: number) {
         </p>
       </div>
       <div class="tools">
-        <input
-          v-model="keyword"
-          class="search"
-          type="search"
-          placeholder="搜尋所有欄位，例如 Chen、Engineer、42、2015-03"
-          aria-label="搜尋所有欄位"
-          :disabled="booting"
-        />
+        <div class="search-box">
+          <input
+            v-model="keyword"
+            class="search"
+            type="search"
+            placeholder="搜尋所有欄位，例如 Chen、Engineer、42、2015-03"
+            aria-label="搜尋所有欄位"
+            :disabled="booting"
+          />
+          <span
+            class="search-icon"
+            aria-hidden="true"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            >
+              <circle
+                cx="11"
+                cy="11"
+                r="7"
+              />
+              <path d="M20 20l-4-4" />
+            </svg>
+          </span>
+        </div>
         <SortMenu
           v-model="sortChoice"
           class="mobile-sort"
@@ -499,15 +522,31 @@ h1 {
   gap: 8px;
   width: min(520px, 100%);
 }
+.search-box {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
 .search {
   font: inherit;
   flex: 1;
   min-width: 0;
   padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  border: 0;
+  border-radius: 8px 0 0 8px;
+  background: transparent;
   color: var(--text);
+}
+/* 輸入框和放大鏡之間的分割線 */
+.search-icon {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
 }
 .mobile-sort {
   display: none;
@@ -563,13 +602,14 @@ h1 {
   .tools {
     flex-wrap: wrap;
   }
-  .search {
+  .search-box {
     flex-basis: 100%;
   }
-  .search,
+  .search-box,
   .mobile-sort,
   .tools .btn {
     min-height: 44px;
+    box-sizing: border-box;
     /* 16px 以下 iOS 會在點選時自動放大畫面 */
     font-size: 16px;
   }
