@@ -626,10 +626,6 @@ h1 {
   }
   .tools .btn {
     height: 44px;
-    /* 手機版底色也跟排序選單一樣，實心藍底會讓按鈕看起來比較大 */
-    background: var(--surface);
-    color: var(--accent);
-    font-weight: 600;
   }
   .meta .hint {
     display: none;
