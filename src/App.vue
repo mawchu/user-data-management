@@ -4,6 +4,7 @@ import UserTable from './components/UserTable.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import EditUserDialog from './components/EditUserDialog.vue'
 import PinDialog from './components/PinDialog.vue'
+import SortMenu from './components/SortMenu.vue'
 import { useUserList } from './composables/useUserList'
 import { usePinnedRows } from './composables/usePinnedRows'
 import { HttpError } from './api/http'
@@ -59,6 +60,13 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: 'dateStart', label: 'Date Start' },
 ]
 // 手機沒有表頭可以點，用選單排序
+const SORT_OPTIONS = [
+  { value: '', label: '不排序' },
+  ...COLUMNS.flatMap((column) => [
+    { value: `${column.key}:asc`, label: `${column.label} ↑` },
+    { value: `${column.key}:desc`, label: `${column.label} ↓` },
+  ]),
+]
 const sortChoice = computed({
   get: () => (query.sortBy ? `${query.sortBy}:${query.order}` : ''),
   set: (value: string) => {
@@ -233,21 +241,12 @@ function submitPin(row: User, position: number) {
           aria-label="搜尋所有欄位"
           :disabled="booting"
         />
-        <select
+        <SortMenu
           v-model="sortChoice"
           class="mobile-sort"
-          aria-label="排序"
+          :options="SORT_OPTIONS"
           :disabled="booting"
-        >
-          <option value="">不排序</option>
-          <template
-            v-for="column in COLUMNS"
-            :key="column.key"
-          >
-            <option :value="`${column.key}:asc`">{{ column.label }} ↑</option>
-            <option :value="`${column.key}:desc`">{{ column.label }} ↓</option>
-          </template>
-        </select>
+        />
         <button
           class="btn primary"
           :disabled="booting"
@@ -512,12 +511,6 @@ h1 {
 }
 .mobile-sort {
   display: none;
-  font: inherit;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
 }
 .notice {
   margin: 0;
@@ -585,16 +578,11 @@ h1 {
     flex: 1;
     min-width: 0;
     height: 44px;
-    /* Safari 的原生 select 不吃高度設定，改成自己畫箭頭才會跟按鈕一樣高 */
-    -webkit-appearance: none;
-    appearance: none;
-    padding: 0 36px 0 12px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2394a3b8' stroke-width='2'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
   }
   .tools .btn {
     height: 44px;
+    /* 邊框跟排序選單同色，兩者看起來才一樣大 */
+    border-color: var(--border);
   }
   .meta .hint {
     display: none;

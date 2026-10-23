@@ -478,7 +478,8 @@ assert.ok(layout.pageOverflow <= 0, `頁面不應左右捲動 ${layout.pageOverf
 assert.ok(layout.tableOverflow <= 0, `列表不應左右捲動 ${layout.tableOverflow}`)
 assert.equal(layout.rowHeight, 124)
 assert.equal(layout.headVisible, 'none')
-await mobile.selectOption('.mobile-sort', 'age:desc')
+await mobile.click('.mobile-sort .trigger')
+await mobile.click('.mobile-sort [data-value="age:desc"]')
 await mobile.waitForFunction(
   () =>
     !document.querySelector('.scroller.stale') &&
