@@ -566,20 +566,24 @@ h1 {
   border-radius: 8px;
 }
 @media (max-width: 640px) {
-  /* 手機：搜尋、排序、新增各佔一列，按得到也看得清楚 */
+  /* 手機：搜尋獨佔第一列，排序和新增共用第二列 */
   .tools {
-    flex-direction: column;
+    flex-wrap: wrap;
+  }
+  .search {
+    flex-basis: 100%;
   }
   .search,
   .mobile-sort,
   .tools .btn {
-    width: 100%;
     min-height: 44px;
     /* 16px 以下 iOS 會在點選時自動放大畫面 */
     font-size: 16px;
   }
   .mobile-sort {
     display: block;
+    flex: 1;
+    min-width: 0;
   }
   .meta .hint {
     display: none;
