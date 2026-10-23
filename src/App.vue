@@ -518,6 +518,8 @@ h1 {
   color: var(--text);
 }
 .tools {
+  /* 放大鏡區塊和新增按鈕共用同一個寬度，右側才會對齊 */
+  --action-width: 64px;
   display: flex;
   gap: 8px;
   width: min(520px, 100%);
@@ -544,7 +546,11 @@ h1 {
 .search-icon {
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  justify-content: center;
+  /* 扣掉外框右側 1px，外緣才會跟按鈕一樣寬 */
+  width: calc(var(--action-width) - 1px);
+  box-sizing: border-box;
+  flex: none;
   border-left: 1px solid var(--border);
   color: var(--muted);
 }
@@ -553,6 +559,9 @@ h1 {
 }
 /* 新增按鈕的邊框、圓角跟搜尋框一致，才不會看起來比較大 */
 .tools .btn {
+  width: var(--action-width);
+  flex: none;
+  padding-inline: 0;
   border-color: var(--border);
   border-radius: 8px;
 }
